@@ -1,0 +1,15 @@
+.idea
+dist
+*egg*
+*.pyc
+build
+*checkpoints*
+*.nfs
+*.sw[pmno]
+jwu/
+uv.lock
+
+src/waterz/**/*.pyc
+src/waterz/**/*.c
+src/waterz/**/*.so
+src/waterz/evaluate.cpp
