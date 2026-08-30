@@ -168,20 +168,21 @@ Learning for Connectome Reconstruction"). This is the pipeline
 context: CNN affinities → waterz-style agglomeration. Not an algorithm
 we implement. Do not treat it as a speed or VOI number.
 
-## S10 — Nunez-Iglesias, Kennedy, Parag, Shi, Chklovskii 2013.
-"Machine learning of hierarchical clustering to segment 2D and 3D
-images." PLOS ONE. arXiv:1303.5942. PDF: `nunez_iglesias_gala_2013.pdf`.
-GALA: learned agglomeration on a RAG, VOI as the connectomics metric.
-Confirms VOI-split / VOI-merge as the field's grading language.
-Does not give us a GPU algorithm.
+## S10 — GALA / Nunez-Iglesias 2013: **not read**
+
+PLOS ONE 8(8):e71741 is the real GALA paper. The file that landed as
+`nunez_iglesias_gala_2013.pdf` was arXiv:1303.5942 (Brassard et al.,
+unrelated). Deleted. Do not cite GALA. VOI definition we use is S5
++ TASK.md, not that paper.
 
 ## S11 — not obtained (do not cite as read)
 
 | Attempt | Status |
 |---|---|
-| Meilă VOI (`compare-colt.pdf`) | curl still running / not confirmed on disk |
-| Zlateski MIT thesis | dspace hung; waterz README cites bitbucket.org/poozh/watershed and TuragaLab/zwatershed — we have the **forked source**, not the thesis |
-| Turaga 2010 affinity nets | not confirmed downloaded |
+| Meilă VOI | not on disk |
+| Zlateski MIT thesis | dspace hung; we have the **forked waterz source**, not the thesis |
+| Turaga 2010 affinity nets | not on disk. A file briefly named `turaga_affinity_2010.pdf` was Tschopp ETH TR arXiv:1509.03371 — deleted, not cited |
+| Nunez-Iglesias GALA | see S10 |
 | Tarball `README.md` (532 MB, "verified line-by-line") | **not yet downloaded**. E0. Until then, S1–S5 + TASK.md are the spec. |
 
 ## S12 — greengoblin, 2026-08-30 15:26 local (measured, not guessed)
