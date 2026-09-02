@@ -392,6 +392,44 @@ __global__ void k_pack_prop_fused(
     pay[slot] = ((unsigned long long)i << 32) | (unsigned long long)sz[i];
 }
 
+// One-launch proposal sort for the common small case. A 64-bit CUB device
+// radix sort is eight passes of a couple of kernels each, and the proposal
+// count has a median of 0 and a mean of about 2700, so nearly all of that
+// call's cost is launches rather than sorting. A single block sorts up to
+// BLOCK_T * ITEMS keys in shared memory with one launch.
+//
+// Padding with all-ones sorts the empty slots to the end, leaving the first
+// nprop entries in the same order the device sort produces: both are stable
+// radix sorts, so equal keys keep their input order in either.
+template <int BLOCK_T, int ITEMS>
+__global__ void k_sort_prop_block(
+    const unsigned long long* key_in, const unsigned long long* pay_in,
+    unsigned long long* key_out, unsigned long long* pay_out, int nprop)
+{
+    using BlockSort = cub::BlockRadixSort<
+        unsigned long long, BLOCK_T, ITEMS, unsigned long long>;
+    __shared__ typename BlockSort::TempStorage tmp;
+    unsigned long long k[ITEMS], p[ITEMS];
+    const int base = (int)threadIdx.x * ITEMS;
+    for (int j = 0; j < ITEMS; ++j) {
+        int i = base + j;
+        k[j] = i < nprop ? key_in[i] : ~0ull;
+        p[j] = i < nprop ? pay_in[i] : 0ull;
+    }
+    BlockSort(tmp).Sort(k, p);
+    for (int j = 0; j < ITEMS; ++j) {
+        int i = base + j;
+        if (i < nprop) {
+            key_out[i] = k[j];
+            pay_out[i] = p[j];
+        }
+    }
+}
+
+static const int PSORT_BLOCK_T = 256;
+static const int PSORT_ITEMS = 8;
+static const int PSORT_BLOCK_CAP = PSORT_BLOCK_T * PSORT_ITEMS;
+
 __global__ void k_unpack_prop(
     const unsigned long long* key, const unsigned long long* pay,
     uint32_t* reds, uint32_t* blues, uint32_t* addsz, int nprop)
@@ -2026,9 +2064,15 @@ static int parhac_e6s_dev(
                     int bp = (nprop + threads - 1) / threads;
                     if (bp < 1) bp = 1;
                     ev_sort.start();
-                    cub::DeviceRadixSort::SortPairs(
-                        psort_tmp, psort_bytes, pkey_in, pkey_out,
-                        ppay_in, ppay_out, nprop);
+                    if (nprop <= PSORT_BLOCK_CAP) {
+                        k_sort_prop_block<PSORT_BLOCK_T, PSORT_ITEMS>
+                            <<<1, PSORT_BLOCK_T>>>(
+                                pkey_in, ppay_in, pkey_out, ppay_out, nprop);
+                    } else {
+                        cub::DeviceRadixSort::SortPairs(
+                            psort_tmp, psort_bytes, pkey_in, pkey_out,
+                            ppay_in, ppay_out, nprop);
+                    }
                     k_unpack_prop<<<bp, threads>>>(
                         pkey_out, ppay_out, dreds, dblues, dadd, nprop);
                     ev_sort.stop();
