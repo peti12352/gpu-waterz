@@ -1403,3 +1403,75 @@ figures rank the work but do not predict a dedicated card.
 Still queued: `sort` is 1483 ms for a median nprop of 0, so it is CUB's ~16
 kernel launches per call, not work; a single-block `cub::BlockRadixSort` fast
 path for small nprop makes that one launch.
+
+## The graded entry point was not using any of this work
+
+The card went idle, so for the first time the numbers mean something. Two
+findings, and the second one dwarfs every optimisation in this log.
+
+### On an idle card the contention theory checks out exactly
+
+    a4 round-trip cost   883 us contended  ->  2.55 us idle    346x
+    the loop's 7360      6498 ms           ->  19 ms, 3% of total
+    p0aa wall @T=0.3     32791 ms          ->  1022 ms         32x
+    E6s device @T=0.3     8255 ms          ->  668 ms
+
+So declining to restructure the inner loop for device-side control was right:
+that whole 66% was a scheduling quantum, not a drain, and it is 3% on a card
+we own. The earlier entry's warning about ranking work by contended timings is
+now confirmed rather than merely argued, and the *rankings* changed too, not
+just the magnitudes. Contended, `sort` looked like 1483 ms; idle it is 23 ms.
+
+Idle stage split at T=0.3 on val, 180 Mvox:
+
+    compact 377   propose 90   compress 77   sort 23   memset 22
+    d2h 17   accept 16   color 14   pack 13   freeze 12       sum 661
+
+### segment() was running the host agglomeration
+
+`scripts/bench.py` reported `heap=20.4 s` and turned out to be measuring the
+CPU reference path, so it was never going to show this. Writing a bench against
+the real entry point (`scripts/d_bench.py`) surfaced it immediately:
+`agg=40991 ms` where the device path is 668 ms.
+
+`_parhac` called `parhac_paper_cpu` unconditionally. The device build was
+reachable only behind `data/cache/e6r_pass.txt`, which read
+
+    FAIL PASS T03_ms=1294.21 budget=50
+
+That gate required the device build to come in under 50 ms before it was
+allowed to run at all. The effect was backwards: missing a speed target left
+the graded path on an implementation ~60x slower still. Correctness is the
+right gate for *which* implementation runs; speed is the thing being
+optimised, not a precondition for being used. And the device path carries the
+stronger correctness evidence, being graded VOI-legal at four thresholds and
+byte-identical run to run, neither of which the host path has in this repo.
+
+`_parhac` now dispatches to `parhac_paper_d`, whose signature is identical, and
+`WATERZ_AGG_CPU=1` forces the host build for A/B. `segment.AGG_BACKEND`
+records which ran so a benchmark can refuse to publish a number measured on
+the fallback, which `d_bench.py` does.
+
+Verified end to end through `segment()`, not just on a cached RAG:
+
+- `eval.sh` accuracy: ACCURACY GATE PASS at 0.2/0.3/0.4/0.5, with
+  nseg `[294164, 321999, 345130, 379292]` and VOI figures matching a1 exactly
+- `g5_det.py`: PASS, byte-identical, nseg 321973
+
+### Where the pipeline actually stands
+
+Idle-card stage medians on val (180 Mvox), from before the wiring change for
+ws/rag and from the device path for agg:
+
+    ws 536 (of which Union-Find 225)   rag 114   agg 668   extract ~175
+
+That is ~1.5 s against the ~90 ms that 2 Gvox/s implies at this size. Every
+stage is now the honest one, which it was not an hour ago.
+
+One thing to watch: `uf_rounds` came out 6 in one run and 7 in another while
+the output stayed byte-identical. The extra round is the one that observes no
+change, so a benign race on when the flag is seen would explain it, and the
+result is unaffected. Worth confirming rather than assuming.
+
+`d_bench.py` refuses to grade while the card is shared, and it is shared again,
+so the median-of-5 throughput number still needs an idle window.
