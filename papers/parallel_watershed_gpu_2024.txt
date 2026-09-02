@@ -1,0 +1,856 @@
+                                                                                    Parallel Watershed Partitioning:
+                                                                               GPU-Based Hierarchical Image Segmentation
+
+                                                                                  Varduhi Yeghiazaryana,b , Yeva Gabrielyana,c , Irina Voiculescub
+                                                                            a American University of Armenia, 40 Marshal Baghramyan Ave, Yerevan, 0019, Armenia
+                                                                  b University of Oxford, Department of Computer Science, Wolfson Building, Parks Road, Oxford, OX1 3QD, UK
+                                                                                    c Denovo Sciences LLC, 138/2 Verin Antarain Str, Yerevan, 0009, Armenia
+
+
+
+
+                                         Abstract
+                                         Many image processing applications rely on partitioning an image into disjoint regions whose pixels are ‘similar.’ The watershed
+arXiv:2410.08946v1 [cs.CV] 11 Oct 2024
+
+
+
+
+                                         and waterfall transforms are established mathematical morphology pixel clustering techniques. They are both relevant to modern
+                                         applications where groups of pixels are to be decided upon in one go, or where adjacency information is relevant. We introduce
+                                         three new parallel partitioning algorithms for GPUs. By repeatedly applying watershed algorithms, we produce waterfall results
+                                         which form a hierarchy of partition regions over an input image. Our watershed algorithms attain competitive execution times
+                                         in both 2D and 3D, processing an 800 megavoxel image in less than 1.4 sec. We also show how to use this fully deterministic
+                                         image partitioning as a pre-processing step to machine learning based semantic segmentation. This replaces the role of superpixel
+                                         algorithms, and results in comparable accuracy and faster training times.
+                                         Keywords: Watershed transform, GPU acceleration, Waterfall transform, Path reduction, Parallel union–find, Real-time image
+                                         segmentation
+
+
+                                         1. Introduction
+
+                                            Image partitioning was originally known in Computer Vision
+                                         under the name of ‘image segmentation’. Nowadays, ‘image
+                                         segmentation’ often refers to semantic segmentation, where an
+                                         object is segmented out of an image. The fully deterministic
+                                         techniques proposed in this work refer to partitioning an image
+                                         into disjoint regions of interest—with the ultimate downstream
+                                         goal of improving segmentation or classification algorithms.
+                                            With a constant increase in the resolution of input into imag-
+                                         ing algorithms, many techniques resort to processing multiple
+                                         pixels in one go. This is achieved through downsampling the
+                                                                                                                          Figure 1: Hierarchical output on two input images: cameraman and knee MRI
+                                         input image gradually through the depths of the layers of a
+                                                                                                                          slice. Top: raw greyscale inputs, gradient magnitude images (after Gaus-
+                                         machine learning network, or through grouping pixels together                    sian blurring); middle and bottom: cropped originals overlaid with water-
+                                         into superpixels [1, 2]. Pixel grouping is carried out as a one-                 shed/waterfall lines in yellow for NL=6 hierarchical layers.
+                                         off pre-processing step and merits particular attention due to the
+                                         quality of its results influencing the downstream pipeline.
+                                            In the 1990s, image partitioning was synonymous with the                          Our goal is to construct hierarchical segmentations (or par-
+                                         watershed transform, which has been utilized for segmentation                    titions) of decreasing granularity, from input images of ultra-
+                                         and feature extraction [3, 4, 5, 6]. The watershed has also been                 high resolution. This is achieved through deploying fast, par-
+                                         used as a pre- or post-processing step in various deep learn-                    allel GPU-based watershed and waterfall transforms. These
+                                         ing (DL) applications [7, 8, 9, 10, 11]. However, watersheds                     cluster pixels into equivalence classes through Union–Find, and
+                                         have two main drawbacks: over-segmentation (regions are too                      then cluster these classes into larger partitions. The steps are:
+                                         small) and slow processing times (if executed sequentially).                     1. smooth the input image (minimally), 2. construct a gradient
+                                            Our previous work [12, 13] aired three fast GPU watershed                     magnitude image, 3. apply the watershed transform, and 4. re-
+                                         algorithms: PRW, APRUF and PRUF, which bring the water-                          peatedly apply the waterfall transform. Fig. 1 illustrates output
+                                         shed up to modern requirements. This paper builds on that pre-                   from this pipeline on two sample images: cameraman and knee
+                                         vious work by speeding up and extending it to employ water-                      magnetic resonance imaging (MRI) slice. The segmented re-
+                                         shed algorithms multiple times to achieve a hierarchical water-                  gion boundaries, called watershed lines, in yellow are overlaid
+                                         fall transformation, mitigating over-segmentation.                               on the original greyscale images.
+                                         Preprint submitted to Journal of Parallel and Distributed Computing                                                                      October 14, 2024
+   The results of our experiments carried out on multiple                  process produces a series of image partitionings with a mono-
+datasets and GPUs demonstrate that the proposed algorithms                 tonically decreasing number of catchment basins, until a single
+outperform previous watershed algorithms for GPU execution                 region corresponds to the whole image. Aside from the wa-
+in both effectiveness and efficiency. Furthermore, we show that            terfall that can be directly applied on an image, a number of
+the proposed algorithm for the hierarchical waterfall transform            graph-based waterfall algorithms have been proposed for fast
+can be used as a replacement for superpixel algorithms in the              sequential implementation [33, 34].
+pre-processing step of DL approaches to hyperspectral image                   In order to mitigate the shortcomings of classical waterfall
+classification applications (up to 3.9× speedup). This work                (early removal of important contours from the hierarchy and
+highlights the versatility, relevance, and continued utility of par-       the difficulty of finding a ‘good’ depth of hierarchy) three mod-
+allel watershed/waterfall algorithms in Computer Vision.                   ifications of the waterfall transform have been proposed. The
+   The main contributions of this paper are as follows:                    standard and the P algorithms [35] replace the hidden parame-
+                                                                           ter called gain with an explicit one. Enhanced waterfall trans-
+ (i) three GPU watershed algorithms (PRW, PRUF, APRUF);                    form [36] re-introduces selected contours into the watershed re-
+     earlier versions in our conference papers [12, 13];                   sults of each level of the hierarchical segmentation based on
+                                                                           specific rules. An intuitive application of the classical wa-
+(ii) novel GPU waterfall that mitigates over-segmentation;
+                                                                           terfall transform is the construction of image partition forests
+(iii) analysis of the effect of parameters (connectivity);                 (IPFs) [37, 38].
+
+(iv) Computer Vision applications of waterfall algorithm.
+                                                                           3. Proposed Watershed Algorithms
+2. Related Work
+
+   The watershed is a greyscale image transformation from
+mathematical morphology that partitions the image into multi-
+ple small regions. Images are interpreted as topographic terrain
+maps: white pixels correspond to the highest and black to the
+lowest altitudes. The watershed transform segments the image
+into disjoint regions called catchment areas, or basins. These
+regions are formed around regional minima in the topographic
+terrain. The boundary pixels separating the different catchment
+basins are called watershed lines, or watersheds. When the wa-
+tershed transform is applied to the gradient magnitude image,
+the boundaries of catchment basins are placed at pixels with               Figure 2: PRUF pipeline inside blue dashed outline. Each of steps I–III cor-
+high gradient magnitude values (these correspond to boundaries             responds to one CUDA kernel: I executed once, II and III repeated iteratively.
+of regions of interest).                                                   Step IV is achieved through two CUDA kernels, each executed once. Input im-
+                                                                           age smoothing and use of gradient magnitude image are optional.
+   A detailed discussion of watersheds is given in [14]. Im-
+plementations of watersheds with distributed memory par-
+allelism [15, 16], shared memory parallelism [17, 18] and                     We present three parallel algorithms for the watershed
+GPUs [19, 20, 21, 22] have also been explored. Watersheds                  transform: path reducing watershed (PRW), path reducing
+on GPUs have been the subject of recent research due to the in-            Union–Find watershed (PRUF) and alternative PRUF watershed
+creasing demand for faster image processing. Initially GPU im-             (APRUF). In the next section we show that, with the addition
+plementations of the watershed used ‘flooding’ [23, 19, 24, 25],           of two CUDA kernels, it is possible to produce a waterfall al-
+but hybrid [26, 27] (named DW in the experimental compar-                  gorithm from each of these watershed algorithms.
+ison below) and parallel depth-first watershed algorithms [28,                Each one of our parallel watersheds consists of four ma-
+20, 22, 29] have also been proposed.                                       jor steps: I: initialise pixel states and labels, II: resolve non-
+   Computer Vision applications of the watershed [30, 3, 4, 5, 6]          minimal plateaux, III: propagate labels, or reduce paths, and IV:
+include image segmentation, object boundary detection, im-                 merge minimal plateau labels. This process belongs to the class
+age restoration. It is also commonly used as a pre- or post-               of topographic-distance-based watershed transforms; it exploits
+processing step for various applications working with micro-               paths of steepest descent. The four steps can be alternatively
+scopic images [9, 10], micro-CT images [5].                                viewed as: I: initialise paths of steepest descent; II: resolve
+   The waterfall [31, 32] is a hierarchical segmentation trans-            paths on non-minimal plateaux; III: reduce paths into pointers
+form based on the watershed. It is a merging technique which               to local minima; IV: add extra paths inside minimal plateaux
+addresses over-segmentation. The main idea of waterfall is                 to achieve a single pointer target, i.e. label, for each catchment
+that catchment basins from the watershed get turned into new               basin.
+plateaux and the watershed is re-applied. The resulting image                 Figure 2 illustrates the general workflow for PRUF. Details
+contains a reduced number of regional minima. This recursive               of PRW and APRUF are described later in the text.
+                                                                       2
+Algorithm 1 Path reducing, Union–Find watershed                                      • Lastly, if I(q) = I(p), then p is inside a plateau. We differ-
+ 1: for all p ∈ P in parallel do {Step I: initialise labels & states}                  entiate such pixels into two states:
+ 2:    q D max{r ∈ N(p) | ∀n ∈ N(p), I(r) ≤ I(n)}
+ 3:    if I(q) < I(p) then                                                                    – a plateau pixel that has at least one equal neighbour
+ 4:        L(p) D q; S (p) D 0                                                                  (row-major order) after it (S (p) = 2) and
+ 5:    else if I(q) > I(p) then
+ 6:        L(p) D p; S (p) D 1                                                                – a plateau pixel that have equal neighbours (row-
+ 7:    else if q > p then                                                                       major order) only before it (S (p) = 3).
+ 8:        L(p) D q; S (p) D 2
+ 9:    else if q < p then                                                                  If the plateau is eventually, after step II, categorised as
+10:        L(p) D p; S (p) D 3
+11: repeat {Step II: resolve non-minimal plateaux}                                         minimal, state-3 plateau pixels will lend their label to
+12:    for all p ∈ P in parallel do                                                        state-2 plateau pixels. Hence, L(p) = q if S (p) = 2 and
+13:        if S (p) ≥ 2 and ∃q ∈ N(p), S (q) = 0 ∧ I(q) = I(p) then                        L(p) = p forms a self-loop if S (p) = 3.
+14:            L(p) D q; S ′ (p) D 0
+15:        else
+16:            S ′ (p) D S (p)
+17:     swap(S , S ′ )
+18: until ¬change
+19: repeat {Step III: propagate labels, or reduce paths}
+20:    for all p ∈ P in parallel do                                                                (a) 6×2 greyscale input with expected watershed line
+21:        for i D 1, RR and L(p) , L(L(p)) do
+22:            L(p) D L(L(p))
+23: until ¬change
+24: for all p ∈ P in parallel do {Step IV: merge min plateau labels}
+25:    if S (p) ≥ 2 then
+                                                                                                  (b) step I: initialise states (colours) and labels (arrows)
+26:        for all q ∈ N(p), q > p, S (q) ≥ 2 do
+27:            Union(L, p, q)
+28: for all p ∈ P in parallel do
+29:    L(p) D Find(L, p)
+
+                                                                                                  (c) step II: update non-minimal plateau states and labels
+3.1. Path-Reducing, Union–Find Watershed
+   Algorithm 1 details PRUF. Let P be the set of all pixel po-
+sitions in the image, and for every p ∈ P let the local neigh-
+bourhood N(p) be the set of pixels in the image that are a unit                                   (d) step III: propagate minima labels uphill to all pixels
+distance away from p. The obvious choices are either Moore
+neighbourhood with 8 pixels in 2D and 26 voxels in 3D, or von
+Neumann neighbourhood with 4 pixels in 2D and 6 voxels in
+3D, both reported hereafter.                                                                             (e) step IV: merge minimal plateau labels
+   During step I: initialisation, all pixels are classified into four
+groups, called states, using the image values of the neighbour-                   Figure 3: Simple 6×2 greyscale input image illustrates our path reducing wa-
+                                                                                  tershed algorithms (4-pixel neighbourhood). State and label updates are high-
+ing pixels. Our algorithm requires that all pixels in the im-                     lighted in red boldface; red italics indicate that an update was considered but
+age be ordered; our implementation uses row-major order. Let                      not performed. Pixel states are colour-coded:       state 0,   state 1,   state
+q ∈ N(p) be the pixel neighbouring p that has the smallest input                  2, and      state 3.
+image value. If the minimum value occurs at multiple neigh-
+bours, let q be the last in the fixed order among all pixels in that
+                                                                                     Step II resolves non-minimal plateaux. It propagates labels
+neighbourhood that have the minimum image value:
+                                                                                  inwards into a non-minimal plateau from its boundaries. For
+                                                                                  every state-2 or state-3 pixel p, S (p) ≥ 2, if ∃q ∈ N(p) such
+            q = max{r ∈ N(p) | ∀n ∈ N(p), I(r) ≤ I(n)},                 (1)
+                                                                                  that S (q) = 0 and if I(q) = I(p), then S (p) is reset to 0 and L(p)
+where I(p) is the image value at pixel p ∈ P. Fig. 3 details the                  is updated to equal q. We repeat this process iteratively until
+steps of the watershed on a small example.                                        convergence with no state updates. The states are buffered dur-
+                                                                                  ing iterations and swapped between iterations to achieve consis-
+   • If I(q) < I(p), then the direction of steepest descent from p                tent propagation of labels into non-minimal plateaux (see fur-
+     is q. The initial label L of p is set to q; later it will borrow             ther discussion in Sec. 3.4).
+     its eventual label from q. Thus, pixel p is assigned to be in                   After step II the pixel states can be seen in a new way, slightly
+     state 0 to indicate it has a lower neighbour (S (p) = 0).                    different from the initial interpretation. State 0 corresponds to
+                                                                                  pixels with a lower neighbour and non-minimal plateau pixels.
+   • If I(q) > I(p), then p is a local minimum. We set L(p) =                     States 2 and 3 only mark pixels within minimal plateaux. Since
+     p, so that later this value can be used to label the whole                   labels point to either a neighboring pixel or themselves and
+     catchment basin. The set of local minima is indicated by                     are acyclic, they can be followed recursively to create directed
+     their states fixed at 1.                                                     paths between pixels. The labels of all state-0 pixels form paths
+                                                                              3
+leading to minima, specifically state-1 or state-3 pixels. These                 state-3 pixels (which can occur in 2D or higher-dimensional
+steepest descent paths define different catchment basins. Ad-                    images). To address this, we use a parallel Union–Find imple-
+ditionally, within minimal plateaus, the labels of state-2 pixels                mentation [39] to merge all disjoint sets that represent the same
+create further paths to state-3 pixels. Therefore, any label path                catchment basin. Step IV performs a Union whenever it detects
+starting from any pixel will ultimately lead to a state-1 or state-3             neighbouring minimal-plateau pixels with varying labels, thus
+pixel, where the label forms a self-loop.                                        merging the different labels within the same catchment basin.
+   In step III, all label paths are reduced into direct pointers                 Finally, it updates each pixel’s label to the index, or label, of
+from any image pixel into its corresponding catchment basin                      the set representative by executing a Findoperation.
+minimum state-1 or state-3 pixel. This process is performed in-                     When we introduced PRW [12] we showed it was signifi-
+dependently and in parallel for each pixel, following the label                  cantly faster than existing approaches. It differs from PRUF
+pointers until a self-loop is encountered. However, this pro-                    only in step IV. The pseudocode for that step is presented in
+cedure requires time proportional to the length of the longest                   Alg. 2. A further improvement over [12] and [13] is to consider
+label path, making the worst-case time complexity linear rela-                   only half of the neighbourhood in step IV (q > p on line 26 of
+tive to the image size. To reduce this complexity to logarithmic,                Alg. 1 and line 27 of Alg. 2).
+we synchronize all labels after a fixed number of updates and
+repeat the process iteratively. This fixed number of updates be-                 Algorithm 2 Path reducing watershed
+tween synchronizations is called reduction rate (RR). The label                      {Steps I–III are the same as in Alg. 1}
+of each pixel p is updated to its label’s label RR times; the new                24: repeat {Step IV: merge minimal plateau labels}
+                                                                                 25:    for all p ∈ P in parallel do
+label value is recorded instead of the original L(p) and made                    26:       if S (p) ≥ 2 then
+available to other pixels to read. This iterative process contin-                27:           for all q ∈ N(p), q > p, S (q) ≥ 2 do
+ues until no further label changes occur. The overall number                     28:               lp D L(p); lq D L(q)
+of operations is O(RR×⌈logRR+1 Len⌉) = O(⌈logRR+1 Len⌉) ≤                        29:               while L(lp) , L(lq) do
+                                                                                 30:                  L(lp) D min(L(lp), L(lq))
+O(logRR+1 |P|), where RR is the reduction rate, Len is the length                31:                  L(lq) D min(L(lp), L(lq))
+of the longest path, |P| is the image size. Figure 4 demonstrates                32:       while L(p) , L(L(p)) do
+path reduction.                                                                  33:           L(p) D L(L(p))
+                                                                                 34: until ¬change
+
+
+                                                                                    For adjacent pixels p, q within a minimal plateau, lp =
+                                                                                 L(p), lq = L(q) are the representative labels of the correspond-
+                                                                                 ing sets. If lp , lq, then we merge the two sets by setting the
+                                                                                 smaller label as the parent pointer of the larger label. Since our
+   Figure 4: Length 22 path with RR = 2, in only ⌈log3 22⌉ = 3 iterations.
+                                                                                 procedure is designed for parallel implementation, more than
+                                                                                 two pixel sets can be merged simultaneously. This check and
+   For a 1D image, the label array produced after steps I-III
+                                                                                 subsequent label update are performed repeatedly until L(lp)
+of the algorithm constitutes a valid watershed result. This is
+                                                                                 equals L(lq). A label path reduction loop is then carried out for
+because each minimal plateau in a 1D image forms an interval,
+                                                                                 all pixels to convert label paths into direct pointers to represen-
+and consequently, the only state-3 pixel within such a plateau
+                                                                                 tative labels. This merging and reduction process continues it-
+is the rightmost pixel. As a consequence, after step III, each
+                                                                                 eratively until no further label changes occur. Upon completing
+catchment basin in the label array has a single value. Still, this
+                                                                                 step IV, each catchment basin will have a single label value, and
+property does not hold for higher-dimensional images. Based
+                                                                                 for each pixel p, L(p) indicates the catchment basin to which p
+on the shape of a minimal plateau, there may be several state-3
+                                                                                 belongs.
+pixels in it. Figure 5 shows a few minimal plateau shapes with
+state-3 pixels highlighted.
+                                                                                 3.2. Alternative Path-Reducing, Union–Find Watershed
+                                                                                    A slightly revised version of the PRUF algorithm, known as
+                                                                                 APRUF, has been developed for relatively smaller images (typ-
+Figure 5: Minimal plateau shapes with state-3 pixels highlighted in a blue
+                                                                                 ically those under 10 megapixels/megavoxels). It alters the im-
+shade. 4-pixel neighbourhood on the left; 8-pixel on the right.                  plementation of step III by substituting lines 19–23 in Alg. 1
+                                                                                 with lines 28–29. In smaller images, catchment basins are
+   Step IV addresses the problem of multiple labels for min-                     generally smaller, resulting in shorter label paths to minima.
+imal plateaux by merging those labels. Once steps I–III are                      While PRUF requires global synchronization to make updated
+complete, the pixel labels can be viewed as a disjoint-set data                  labels visible to other threads, APRUF improves execution time
+structure. A disjoint set of pixels is formed for each one la-                   by eliminating this global synchronization: labels are indepen-
+bel, and all set elements point directly to the set representa-                  dently acquired by each thread.
+tive. One or more disjoint sets correspond to every catchment
+basin in the watershed partitioning. When several labels, i.e.                   3.3. Synchronous Implementation for the GPU
+disjoint sets, overlap within the same catchment basin, it indi-                    Using the CUDA Toolkit by NVIDIA, we have produced
+cates that the basin has a plateau minimum containing multiple                   three different implementations of our PRUF watershed in
+                                                                             4
+Alg. 1. The initial and the most basic implementation of PRUF                  quicker access to data shared among threads, and in-block syn-
+is described first; referred to as synchronous PRUF (PRUFsync ).               chronization is less costly than global synchronization. By uti-
+The remaining two implementations are discussed in Sec. 3.4.                   lizing these block-level tools, we aim to minimize the num-
+Each of the three algorithm variants assigns a dedicated thread                ber of global iterations required for resolving non-minimal
+to each pixel in the image.                                                    plateaux.
+   PRUFsync relies on a host code function and five CUDA ker-                     The block-asynchronous PRUF watershed (PRUFasync ) is dif-
+nels: one for each step of the process, plus an additional one for             ferent from PRUFsync in the second step of the algorithm. Its
+step IV. A kernel is a function that runs on numerous threads                  step II CUDA kernel uses block-level synchronisation to per-
+on the GPU in parallel. The five kernels in PRUFsync imple-                    form multiple state updates.
+ment lines 1–10, 12–16, 20–22, 24–27, and 28–29 in Alg. 1,                        The non-minimal plateau resolution kernel of PRUFasync be-
+respectively.                                                                  gins by loading data into shared and local memory. Because
+   The most expensive step of PRUF (for any implementation),                   each pixel requires access to both the input image and the state
+and PRUFsync in particular, is the resolution of non-minimal                   values of neighboring pixels to update its own state, this infor-
+plateaux. Unlike steps I and III–IV, the number of iterations                  mation is stored in shared memory. Each pixel p is tasked with
+of the code in lines 11–18 in Alg. 1 may be linear in the image                copying its I(p) and S (p) values into the shared memory. Ad-
+size in the worst case. For instance, in the case of (2n + 2)×1                ditionally, pixels located at the block’s boundary also copy the
+example                                                                        values of their neighbors outside the block.
+                                                                                  Each thread block operates with its own shared memory
+            75    89
+                  |        89    89 {z. . .      89       89
+                                                           }    81,            space, and there is no communication between different blocks
+                                       2n
+                                                                               during kernel execution. Data updates from one block become
+then it requires n iterations to complete step II of PRUFsync due              available to threads in other blocks only after being written
+to the costly global inter-block synchronization that occurs after             to global memory and upon completion of kernel execution,
+each state update. Pixel states are initialised in step I as                   which signifies global synchronization points. Consequently,
+                                                                               the shared memory values for the additional band of pixels re-
+                 1     0    2 2 {z. . .
+                            |                   }2    0    1;                  main unchanged during kernel execution (they are updated only
+                                   2n−2                                        within their respective block) and retain the values from the last
+                                                                               global synchronization point. Information is transferred from
+after n − 2 iterations of step II we have
+                                                                               one block to another once per global iteration.
+       1   0 0 {z. . .                          0 0 {z. . .                       Our third variant, balanced block-asynchronous PRUF
+           |                }0     2        2   |                }0   1.
+                                                                               (PRUFbal ), combines block-level synchronization, similar to
+                  n−1                                 n−1
+                                                                               PRUFasync , with the fair watershed lines positioning of, as
+During the (n − 1)th iteration, the remaining 2-states are con-                PRUFsync . We expand the 0–3 state range to include negative
+verted to 0, and the final nth iteration, which does not introduce             numbers: when S (p) < 0 then value |S (p)| indicates the dis-
+any changes, completes the resolution of non-minimal plateaux.                 tance of a non-minimal plateau pixel from the plateau bound-
+   Moreover, because state update for the plateau pixels in lines              aries, reflecting the number of state update operations required
+13–16 of Alg. 1 occur in parallel and the order of update com-                 for information to reach p. Alg. 3 outlines the non-minimal
+pletion is non-deterministic, we require the buffer state memory               plateau resolution step (kernel) for PRUFbal .
+S ′ to ensure correctness. The buffer also ensures a fair distri-
+bution of non-minimal plateaux among neighboring catchment                     Algorithm 3 Non-minimal plateau resolution, PRUFbal
+basins. For the given example at n = 5, the label values after                  1: GlobalT oLocal(L) {Copy label from global to local memory}
+step II will be                                                                 2: GlobalT oS hared(I) {Copy image from global to shared}
+                                                                                3: GlobalT oS hared(S ) {Copy state from global to shared}
+                                                                                4: repeat
+   1←0←0←0←0←0                              0 → 0 → 0 → 0 → 0 → 1,
+                                                                                5:    S yncT hreads {Synchronise threads in block}
+                                                                                6:    S haredT oLocal(S ) {Copy state from shared to local}
+where the numbers represent pixel states and the arrows indi-                   7:    if (S (p) ≥ 2 and ∃q ∈ N(p), S (q) ≤ 0 ∧ I(q) = I(p)) or
+cate the labels.                                                                        (∃q ∈ N(p), S (p) + 1 < S (q) ≤ 0 ∧ I(q) = I(p)) then
+  Therefore, the sizes of non-minimal plateaux within an im-                    8:        L(p) D q; S (p) D S (q) − 1
+                                                                                9:    S yncT hreads {Synchronise threads in block}
+age is anticipated to significantly impact the execution time of               10:    LocalT oS hared(S ) {Copy updated state to shared memory}
+parallel watershed processing. Such trends are documented in                   11: until ¬blockchange
+existing literature [29, 20]; our results in Sec. 5 corroborate this           12: LocalT oGlobal(L) {Copy updated label to global memory}
+assumption.                                                                    13: S haredT oGlobal(S ′ ) {Copy updated shared state to global}
+
+
+3.4. Block-Asynchronous and Balanced Versions                                     After a non-minimal-plateau pixel’s state changes from 2 or
+   Alongside PRUFsync we introduce two additional PRUF wa-                     3 to a negative number, it can be updated iteratively to larger
+tershed implementations designed to enhance execution speed.                   (but still negative) values during subsequent in-block iterations
+These implementations leverage CUDA’s intra-block synchro-                     or following global synchronization points. The resolution step
+nization mechanisms. Block-level shared memory offers                          is deemed complete only when no additional improvements can
+                                                                           5
+                                                                                           We propose a novel parallel waterfall reminiscent of the orig-
+                                                                                        inal [32] based on image reconstruction. After the primary wa-
+                                                                                        tershed is applied on the input image, the image is modified
+                                                                                        by raising each of the catchment basins to a plateau the height
+                                                                                        of which equals the lowest pass point on the watershed line
+                                                                                        surrounding that catchment basin. In other words, the image
+                                                                                        modification comprises the two steps (kernels): V: identify new
+                                                                                        minima; VI: update image with new minima. Alg. 4 provides
+                                                                                        the details of steps V–VI of the image reconstruction for the
+                                                                                        waterfall.
+                                                                                           If P is still the set of pixel positions in the input image, I
+                                                                                        is the image value function, and N(p) is the neighbourhood of
+                                                                                        the position p ∈ P, then for p and q ∈ N(p) on the water-
+Figure 6: Watershed transform of 1D image and three consecutive applications            shed line, i.e. L(p) , L(q), we define the watershed height as
+of waterfall. Curve elevation at each pixel corresponds to its grey value; shades
+                                                                                        height(p, q) = max(I(p), I(q)).
+of blue show updated pixel elevations after each image reconstruction; image
+boundaries and watershed lines are in red.                                                 Since our watershed does not explicitly assign any pixel as
+                                                                                        belonging to watershed lines and all pixels are put into catch-
+                                                                                        ment basins, we can speculate that the watershed lines pass be-
+be made to the states of the non-minimal plateau pixels. In the                         tween pixels at the level of the higher pixels. When the pair p
+case of the simple 14×1 pixel example                                                   and q belong to different catchment basins, then height(p, q) is
+ 75 89 89 89 89 89 89 89 89 89 89 89 89 81                                              the local height of the watershed line separating the catchment
+assuming block size 3, the first global iteration of step II pro-                       basins. For a given watershed catchment basin, its lowest pass
+duces states                                                                            point is the part of the surrounding watershed line with small-
+                                                                                        est height. This means that the height of the lowest pass point
+ 1     0 −1        2    2     2     2     2    2 −3 −2 −1             0     1.
+                                                                                        of a catchment basin equals the minimum among height(p, q),
+Following the second global iteration, we get                                           where p belongs to this catchment basin and q does not. In
+                                                                                        the terrain map abstraction, if we flooded this catchment basin,
+  1     0 −1 −2 −3 −4 −6 −5 −4 −3 −2 −1                               0    1;           then it would leak into a neighbouring catchment basin only af-
+                                                                                        ter reaching the level, or the height, of the lowest pass point.
+   and this is corrected after iteration 3                                              Step V identifies this minimal level for each of the catchment
+                                                                                        basins by considering the whole watershed line. Before step V
+  1    0 −1 −2 −3 −4 −5 −5 −4 −3 −2 −1                                0    1.           the array with the new minimum values (newmin) is initialised
+                                                                                        to a large constant M such that M is at least the upper bound of
+   PRUFbal is slightly slower than PRUFasync due to (a) addi-                           the greyscale range of the input image.
+tional state updates and (b) extra global iterations of resolu-
+tion. Overall, PRUFbal shows a large runtime improvement                                Algorithm 4 Image reconstruction for parallel waterfall
+upon PRUFsync , especially on images with large plateaux.                               1: memset(newmin, M, |P|) {Initialise new min to a large constant}
+   Similar implementation variants can be considered for                                2: for all p ∈ P in parallel do {Step V: identify new min}
+PRW and APRUF, producing PRWsync , PRWasync , PRWbal ,                                  3:    for all q ∈ N(p), L(q) , L(p) do
+APRUFsync , APRUFasync , and APRUFbal . The main parameters                             4:        height(p, q) D max(I(p), I(q))
+                                                                                        5:        newmin(L(p)) D min(newmin(L(p)), height(p, q))
+of the path reducing, Union–Find watershed affecting execution                          6: for all p ∈ P in parallel do {Step VI: update image with new min}
+times are the thread block size and RR.                                                 7:    if I(p) < newmin(L(p)) then
+                                                                                        8:        I(p) D newmin(L(p))
+
+4. GPU Waterfall Transform
+                                                                                           Step VI updates the input image based on the new minimum
+   While the watershed transform is popular in many appli-                              values. Every pixel below the new minimum for its catch-
+cations, its main drawback of over-segmentation is inherent                             ment basin is raised to the level of that new minimum, i.e.
+to this procedure (Fig. 1). Hierarchical segmentation relies                            I(p) = newmin(L(p)) if, before step VI, I(p) was smaller than
+on post-processing of the watershed transform to address the                            newmin(L(p)).
+over-segmentation issue by merging non-significant catchment                               Figure 6 illustrates the image reconstruction process for the
+basins. The waterfall transform [32, 33, 34] constructs the ad-                         waterfall. It depicts the watershed of an input 1D image fol-
+jacency graph of the watershed catchment basins and applies                             lowed by three recursive waterfall applications: the image re-
+the watershed transform on the minimal spanning tree of this                            construction and the watershed. The image boundaries and wa-
+graph to achieve a new coarser segmentation of the input im-                            tershed lines are red. The blue shades correspond to the new
+age. Recursive waterfall application results in a hierarchical                          minima for each old watershed region. Each shade shows an
+segmentation of the image with coarser layers of fewer seg-                             image reconstruction to update pixel elevations.
+mented regions produced at each iteration.                                                 If the watershed transform is applied on the reconstructed im-
+                                                                                    6
+age, the result will be a set of new catchment basins, where each              In terms of dimensionality, this hierarchical segmentation
+corresponds to several catchment basins in the primary water-               mimics the watershed transform used—PRUFbal , in this case.
+shed transform. The image reconstruction and the following                  While a 3D implementation would work for 1D or 2D images,
+watershed transform comprise the waterfall. If applied recur-               the memory consumption pattern of PRUFbal is optimised in
+sively, this transform gradually reduces the number of catch-               case of separate 2D and 3D implementations.
+ment basins, eventually grouping the whole image into a single
+region (Fig. 6).
+                                                                            5. Evaluation and Results
+   Our waterfall implementation relies on PRUFbal for the wa-
+tershed steps I–IV. The image reconstruction steps V–VI are                    Datasets: Two public datasets were used: C4L [40]
+implemented with a single kernel each. Each pixel position in               (greyscale images grouped by resolution), and the Berkeley
+the image is still assigned to a separate execution thread; the pa-         Segmentation Data Set and Benchmarks 500 (BSDS500) [41],
+rameters are set as per PRUFbal . The host code of the procedure            converted to greyscale. We also used three 3D images
+that applies watershed followed by a fixed number of waterfall              (128 mega-voxels each: 320×320×1250, 500×500×512,
+applications is presented in Alg. 5.                                        4000×4000×8), and a 3D image of 800 megavoxels:
+                                                                            4000×4000×50, constructed from the same microCT [12]. The
+Algorithm 5 The host code of the hierarchical segmentation
+                                                                            4000×4000×8 image is also interpreted as a set of eight 2D im-
+ 1: HostT oDevice(I) {Copy image from host to device}
+ 2: DimGrid, DimBlock {Set grid and block dimensions}
+                                                                            ages. For reproducibility, all images are raw (no smoothing).
+ 3: for n ∈ [0, NL − 1] do                                                     Experimental Setup: The experiments were carried out on
+ 4:    InitialisationKernel {Step I}                                        three different machines to include processors and GPUs span-
+ 5:    repeat ResolutionKernel {Step II}                                    ning multiple generations and compute capabilities: (GPU-
+ 6:    repeat ReductionKernel {Step III}
+ 7:    MergingKernel and FullResolutionKernel {Step IV}                     a) Intel Core i7-8700, NVIDIA GeForce GTX 1080, CUDA
+ 8:    if n < NL − 1 then                                                   11.6, (GPU-b) Intel Core i9-12900HK, NVIDIA GeForce RTX
+ 9:        memset(newmin, M, |P|)                                           3050 Ti Mobile, CUDA 11.8, (GPU-c) AMD Ryzen 7 3700X,
+10:        Identi f icationKernel {Step V}                                  NVIDIA GeForce RTX 3060 Ti, CUDA 11.7. Every reported
+11:        U pdateKernel {Step VI}
+12:    DeviceT oHost(L) {Copy labels from device to host}                   watershed execution time is a minimum of ten runs per image
+                                                                            (for reproducibility and to mitigate delays produced by other
+                                                                            running processes), and an average across multiple images in
+   After the image is copied into the device and the thread
+                                                                            the same dataset (where applicable). To confirm the equiva-
+blocks are set up, the hierarchical segmentation is constructed
+                                                                            lence of different watershed procedures for a given image, we
+layer by layer. The layer generation starts with a watershed run
+                                                                            verify that they consistently generate the same number of re-
+(lines 4–7). For all layers except the last one (if 0 ≤ n < NL − 1)
+                                                                            gions. Although there are more powerful GPUs available in
+steps V–VI follow (lines 8–11) to prepare for the next watershed
+                                                                            advanced supercomputer configurations, our selection demon-
+application by reconstructing the image with new minima lev-
+                                                                            strates that the proposed approach is already feasible with stan-
+els. Finally, the new layer of the segmentation is copied from
+                                                                            dard computing hardware.
+the device to the host memory (line 12).
+                                                                               The three algorithms use two types of parameters: the block
+   The memory requirements of the hierarchical segmentation
+                                                                            size for CUDA and the reduction rate RR. The latter is only used
+are the same as for PRUFbal : new variables or arrays are not
+                                                                            in PRUF (Alg. 1), and PRW. Only execution time is affected by
+used. This is achieved by reusing the available memory: the
+                                                                            these parameters; otherwise, the results of different setups are
+same I, L, S , S ′ arrays are used at every application of the water-
+                                                                            equivalent. We have (partly) reported in [12, 42] that CUDA
+shed. This is allowed because: (a) L, S , S ′ are initialised from
+                                                                            block sizes of 16×16 in 2D and 8×8×8 in 3D, and RR= 6 lead
+scratch during steps I–II and (b) L values are copied back into a
+                                                                            to fastest execution.
+new address in the host memory at each iteration. Furthermore,
+the S ′ array is reused under the name newmin in the image re-
+construction steps V–VI.
+   The only new parameter that the hierarchical segmentation
+adds is the number of the waterfall applications. We denote the
+number of watershed applications (primary or as part of wa-
+terfall) NL, indicating the number of segmentation layers gen-
+erated in the hierarchical segmentation. This parameter does
+not affect the execution of the individual waterfall applications.
+                                                                            Figure 7: 4- (left) vs 8-pixel (right) neighbourhood results on brain MRI, de-
+For a typical input image, a hierarchy leading to a single region
+                                                                            picted as overlays with yellow waterfall layer 2 lines.
+corresponding to the whole image is usually achieved in under
+ten waterfall applications: NL=5 to NL=7 is usually enough to
+get a semantically meaningful hierarchy of segmentations. This
+estimate is based empirically on multiple previous experiments              5.1. Watershed Results in 2D and 3D
+in our research group on the application of sequential water-                 Table 1 shows the comparison among PRUF, APRUF, PRW
+shed/waterfall to various data; results in Fig. 1 agree with this.          and DW [26, 28] algorithms. For all four algorithms 8-pixel and
+                                                                        7
+    GPU
+                       conn
+                              source                   C4L Image Dataset [40]                 MicroCT Berkeley [41]
+                                size 256×256 512×512 1024×1024 1920×1080 2560×1440 2560×1920 4000×4000   BSDS500
+                                DW      0.560   1.011     2.442      5.020    7.754     9.968    45.513      0.738
+                               PRW      0.267   0.630     1.823      3.714    5.735     7.520    31.408      0.386
+   1080 (GPU-a)
+                       4
+
+
+
+
+                              APRUF     0.224   0.572     1.910      3.528    5.593     7.379    65.215      0.337
+                               PRUF     0.249   0.605     1.749      3.630    5.793     7.565    28.987      0.363
+                                DW      0.542   1.032     2.553      5.449    8.385    10.510    47.025      0.718
+                               PRW      0.262   0.668     1.875      4.258    6.223     8.158    33.840      0.399
+                       8
+
+
+
+
+                              APRUF     0.221   0.613     1.890      4.096    6.169     8.041    67.851      0.360
+                               PRUF     0.246   0.642     1.825      4.202    6.361     8.275    31.203      0.387
+                                DW      0.626   1.085     2.444      5.115    7.910    10.341    43.497      0.620
+   3050 Ti M (GPU-b)
+
+
+
+
+                               PRW      0.301   0.690     1.812      3.795    5.907     7.776    33.213      0.379
+                       4
+
+
+
+
+                              APRUF     0.264   0.615     1.816      3.657    5.701     7.530    56.532      0.328
+                               PRUF     0.295   0.651     1.775      3.795    5.993     7.859    30.425      0.358
+                                DW      0.470   1.115     2.555      5.562    8.458    10.983    45.985      0.635
+                               PRW      0.264   0.747     1.861      4.525    6.455     8.569    36.055      0.416
+                       8
+
+
+
+
+                              APRUF     0.212   0.685     1.847      4.395    6.341     8.270    72.390      0.372
+                               PRUF     0.242   0.700     1.844      4.526    6.614     8.626    34.496      0.401
+                                DW      1.133   1.592     2.802      4.925    7.451     9.502    34.430      1.310
+   3060 Ti (GPU-c)
+
+
+
+
+                               PRW      0.531   0.791     1.647      3.039    4.660     6.046    21.659      0.635
+                       4
+
+
+
+
+                              APRUF     0.368   0.605     1.506      2.736    4.213     5.564    35.443      0.466
+                               PRUF     0.457   0.717     1.517      2.885    4.448     5.794    19.775      0.549
+                                DW      1.162   1.610     3.013      5.203    7.785     9.462    35.501      1.317
+                               PRW      0.537   0.843     1.804      3.495    5.036     6.202    23.351      0.668
+                       8
+
+
+
+
+                              APRUF     0.389   0.666     1.628      3.210    4.668     5.748    45.046      0.512
+                               PRUF     0.470   0.769     1.674      3.359    4.894     5.991    21.820      0.593
+
+                              Table 1: Different watershed algorithms on 2D images; execution times in ms. Boldface highlight is applied to the best performance.
+
+
+4-pixel neighbourhoods were considered. For both C4L and                                          execution times on images with more slices and smaller intra-
+BSDS500, APRUF (4-pixel on GPU-c) is the fastest: 0.37ms                                          slice resolutions due to the weaker locality.
+for the smallest image group (256×256) and 5.56ms for the
+largest image group (2560×1920). APRUF’s improvement                                              5.2. Effect of Connectivity Choice
+over DW is between 41.44% and 67.52%. PRUF (fastest)
+shows a 44.21% improvement over APRUF (slowest) for the                                             Table 3 analyses the number of catchment basins generated
+4000×4000 images, indicating effectiveness of the reduction                                       by 4- vs 8-pixel neighbourhood on different resolutions (1282 to
+rate on larger images (detailed analysis in [13]). The compar-                                    40962 ) of the same image [43]. In 2D, 4-pixel neighbourhoods
+ison of the execution times among the 8-neighbour implemen-                                       produce 1.8(±0.1) times more catchment basins than 8-pixel.
+tations of the algorithms shows a pattern similar to the case of                                  The relative number of regions generated by each neighbour-
+4-neighbour implementations discussed above.                                                      hood style is independent of the image resolution.
+   The average execution times of PRW, PRUF, APRUF, on 3D
+test images are reported in Table 2. (We were unable to find 3D
+implementations of DW.) The 4000×4000×50 image contains
+8×108 voxels, which is too large for GTX 1080 and RTX 3050
+Ti Mobile GPUs.
+   Across all large 3D images (1.28×108 and 8×108 voxels)
+PRUF and PRW algorithms outperform APRUF, proving the
+effectiveness of the reduction rate on larger images. PRUF with
+6-voxel connectivity (on GPU-c) outperforms PRW across all
+datasets, due to the parallel Union–Find implementation. In                                       Figure 8: Composition of PRUF execution times for 2D and 3D Moore and
+                                                                                                  von Neumann neighbourhoods: data copy, initialise states (I), resolve plateaux
+the best case (500×500×512) PRUF improves 30.77% over
+                                                                                                  (II), propagate labels (III), merge plateaux and propagate labels (IV), data copy
+APRUF. Like in 2D, for small 3D images (256×256×128)                                              back. Measured on GPU-c using 1024×1024 (top) and 500×500×512 (bottom)
+APRUF outperforms the others.                                                                     test images.
+   Across the 128-megavoxel images, the noticeable difference
+in execution times shows a correlation of the number of slices                                      Figure 7 shows the qualitative comparison between 4- and
+in the image and the execution time. Algorithms show longer                                       8-pixel neighbourhoods on the waterfall layer 2. The 4-pixel
+                                                                                              8
+                                        source     C4L                   MicroCT                  MicroCT
+                      GPU
+                      conn
+                                       # voxels 8.39 × 106              1.28 × 108                 8×108
+                                       volume 256×256×128 320×320×1250 500×500×512 4000×4000×8 4000×4000×50
+                                         PRW         17.061     359.172      303.864    303.116
+                                       APRUF         15.617     582.493      435.270    605.604 GPU too small
+                                  6
+              GPU-a
+                      1080
+
+
+
+                                        PRUF         16.121     317.906      286.303    291.115
+                                         PRW         35.299     853.416      695.573    598.303
+                                  26
+
+
+
+
+                                       APRUF         33.613     935.466      754.057    913.332 GPU too small
+                                        PRUF         34.078     784.110      634.653    553.002
+                                         PRW         15.514     352.567      336.017    331.193
+                                       APRUF         14.325     629.491      440.831    550.393 GPU too small
+                      3050 Ti M
+                                  6
+              GPU-b
+
+
+
+
+                                        PRUF         15.486     323.475      319.391    322.818
+                                         PRW         29.102     832.049      747.261    506.382
+                                  26
+
+
+
+
+                                       APRUF         28.362     998.887      862.170    783.947 GPU too small
+                                        PRUF         29.048     807.878      748.010    511.280
+                                         PRW         12.146     285.549      222.612    209.185     1438.270
+                                       APRUF         10.944     471.418      300.419    330.670     2279.560
+                                  6
+                      3060 Ti
+              GPU-c
+
+
+
+
+                                        PRUF         11.379     270.231      207.990    196.857     1357.750
+                                         PRW         21.283     565.747      460.407    315.526     2301.880
+                                  26
+
+
+
+
+                                       APRUF         20.151     687.934      528.559    487.395     3506.960
+                                        PRUF         20.549     559.511      453.554    315.927     2258.020
+
+                      Table 2: Execution times (in ms) of the different watershed algorithms on 3D images. The best performance is in boldface.
+
+
+  conn   128   256    512   1024    2048    4096                                     actual object boundaries. For instance, in segmentation layer 5
+    4  1,748 6,523 24,217 98,107 273,728 413,901                                     of the knee MRI slice, the femur is captured with a single water-
+    8    926 3,458 13,196 52,191 165,869 241,572                                     fall region. For both images, segmentation layer 6 (not shown)
+                                                                                     contains only a single region corresponding to the whole image.
+Table 3: Numbers of catchment basins for 4- and 8-pixel neighbourhoods for
+image resolutions 1282 to 40962 , on [43].                                             layer   128   256    512   1024    2048    4096
+                                                                                         0   1,748 6,523 24,217 98,107 273,728 413,901
+neighbourhood tends to capture small details in the image (re-                           1     277 1,089 3,703 13,808 41,233 56,164
+gion A) but also sometimes over-segments regions (region C).                             2      44   194    578 2,158    6,230   8,652
+Region B illustrates the difference in the number of catchment                           3      10    34     94    320     952   1,334
+basins: 8-pixel version generates larger regions, hence it is                            4       2     6     16     50     138     202
+slower (Fig. 8).                                                                         5       1     1      4     10      21      29
+                                                                                         6       1     1      1      3       5       5
+5.3. Waterfall Results                                                                   7       1     1      1      1       2       2
+                                                                                         8       1     1      1      1       1       1
+
+                                                                                     Table 4: Numbers of catchment basins in different waterfall layers (PRUF) in
+                                                                                     terms of image resolution (1282 to 40962 ), on [43].
+
+                                                                                        Table 4 presents numbers of regions in different layers of
+                                                                                     the hierarchical segmentation on variants of the same im-
+                                                                                     age [43]. Figure 9 compares layer generation runtimes using
+Figure 9: Execution time (in ms) of each layer of waterfall (PRUF) per image         PRUF on [43] with different image resolution (1282 to 20482 ).
+resolution (1282 to 20482 ), on the sample image [43] on GPU-c.                      Each measured layer generation time includes watershed with
+                                                                                     steps I–IV, image reconstruction with steps V–VI (except layer
+   Figure 1 illustrates the results of hierarchical segmentation                     7), and transfer of segmentation labels from device to host. The
+with NL=6 on two 2D images: cameraman and knee MRI slice.                            layer generation times increase with the layer number. The
+The watershed (layer 0) and the waterfall transforms are ap-                         main runtime difference occurs in the duration of step II, which
+plied on the gradient magnitude images of the smoothed input.                        is due to larger non-minimal plateaux appearing after each im-
+The waterfall layers (1–5) demonstrate how smaller regions get                       age reconstruction step.
+gradually grouped together in higher layers of the segmenta-                            The comparison of average execution times (in ms) for the
+tion. In each layer the remaining watershed lines trace the high-                    different waterfall algorithms for the C4L 1024×1024 test im-
+contrast edges in the image, thus moulding themselves around                         ages is presented in Fig. 10. As discussed, APRUF watershed
+                                                                                 9
+(layer 0) is the fastest when it comes to smaller images. How-                       times, reporting overall accuracy (OA), average accuracy (AA),
+ever, as PRUF is more efficient at handling label propagation                        and kappa coefficient (κ) and the training time. All the super-
+for larger image regions, its execution becomes faster on fur-                       pixel segmentation methods use the hyperparameters provided
+ther layers of waterfall.                                                            in [44]. The waterfall algorithm (4-connectivity with NL=4 for
+                                                                                     Indian Pines, University of Pavia datasets and 8-connectivity
+                                                                                     with NL=3 for Salinas dataset) is applied on the gradient mag-
+                                                                                     nitude of the compressed images after applying Gaussian blur-
+                                                                                     ring. The compressed image of the HSI is constructed by av-
+                                                                                     eraging values of all spectral bands. As proposed in [44], su-
+                                                                                     perpixel algorithms are executed on the HSI prepossessed us-
+                                                                                     ing linear discriminant analysis (LDA). We found that skipping
+Figure 10: Comparison of mean execution times (in ms) of the waterfall ver-          the preprocessing steps improved the results of the waterfall.
+sions: PRW, APRUF, PRUF on C4L 1024×1024 images on GPU-c.
+                                                                                     Table 5 reports that the waterfall outperforms the other algo-
+                                                                                     rithms. The waterfall regions tend to be larger, thus they help
+                                                                                     speed up the training without loss of accuracy.
+                                                                                        A further set of experiments is conducted on the task of medi-
+                                                                                     cal image segmentation from noisy labels [2]. The authors pro-
+                                                                                     pose a robust iterative learning strategy that combines noise-
+                                                                                     aware training and noisy label refinement, all guided by su-
+                                                                                     perpixels. The design of the network mitigates the impact of
+                                                                                     noisy training labels by exploiting structural information. The
+                                                                                     model is built upon the assumption that pixels belonging to the
+   Figure 11: Edge preservation in SLIC (left) and waterfall layer 2 (right).
+                                                                                     same superpixel share similar ground truth labels. We believe
+                                                                                     that better object boundary preservation makes waterfall supe-
+                                                                                     rior compared to superpixels.
+6. Improving Semantic Segmentation Using APRUF                                          We compare waterfall to SLIC on the ISIC (skin) and JSRT
+                                                                                     (lung, heart, clavicle) datasets (cropped as per [2]), with the
+   The sterile analysis in Sec. 5 illustrates performance on iso-                    mild label noise setting (noise ratio α=0.3, noise level β=0.5).
+lated examples. Real-life Computer Vision applications of                            We evaluate the predicted masks with Dice similarity coef-
+the waterfall algorithm are envisaged in circumstances where                         ficient (DSC) [49] averaged over the last 10 epochs (out of
+groups of pixels need to be decided upon in one go. The                              200). Hyperparameters of SLIC are as described in [2]. Wa-
+obvious choice of comparison is with superpixel-based algo-                          terfall is applied on the gradient magnitude of the images with:
+rithms [2]. A superpixel is defined as a perceptually homoge-                        4-connecitivity for ISIC, JSRT lung, 8-connectivity for JSRT
+neous region in the image. Usage of superpixel regions dramat-                       clavicle and heart; NL=4 for JSRT and NL=2 for ISIC. Train-
+ically reduces the number of image primitives, thus improving                        ing times and DSC scores are reported in Table 6.
+the computational efficiency of the DL network.                                         Waterfall shows DSC results comparable to SLIC, outper-
+   With the inherent regular shape and the grid-like distribu-                       forming it on JSRT lung and heart datasets. Waterfall under-
+tion of segments, conventional superpixel algorithms ignore                          performance on the ISIC skin and JSRT clavicle data is due
+meaningful image edges by placing them inside a superpixel                           to the nature of the images/labels. Images in the ISIC skin
+(Fig. 11). Since partitioning serves as a basis for later-stage                      dataset do not have clearly defined edges, making it more suit-
+processing, obtaining effective output is important, making wa-                      able for grid-like segmentation. A similar issue occurs on the
+tershed the preferred choice.                                                        JSRT clavicle dataset, where the given label does not have a
+   We compare the waterfall against superpixel using two DL                          clear edge separation on the images of the dataset. Waterfall,
+tasks: hyperspectral image (HSI) classification and noisy label                      due to a smaller-sized segmentation graph, shows a significant
+semantic segmentation. CEGCN [44] is a heterogenous deep                             improvement in the training time of the network, outperform-
+network that combines convolutional neural network (CNN)                             ing the SLIC model 3.9 times on the JSRT clavicle dataset.
+with graph convolutional network (GCN) for HSI classification.                       Note that for the ISIC skin dataset, with some loss of accuracy
+The CNN module is responsible for feature learning on small-                         (75.41 ± 0.263%), the training time can be decreased by around
+scale regular regions, whereas the GCN, given the superpixel                         5 hours by increasing NL=4.
+graph of the image, captures information from a larger-scale
+irregular structure.                                                                 7. Conclusion
+   In the setting of CEGCN, we compare waterfall against su-
+perpixel algorithms: SLIC [45], quick shift (QS) [46], Felzen-                          Our experiments show that in some DL applications, where
+szwalb and Huttenlocher’s (FH) method [47], linear spectral                          edge preservation and fast training are important, choosing wa-
+clustering (LSC) [1], and SEEDS [48]. The comparison is con-                         terfall becomes more robust than using superpixels. To mit-
+ducted on three different HS images: Indian Pines, University                        igate over-segmentation, we propose additional parallel steps
+of Pavia, and Salinas [44]. Each experiment is repeated ten                          that render our algorithms applicable iteratively as waterfall
+                                                                                10
+         Dataset      Metric                      SLIC                   FH                  LSC                     QS               SEEDS              Waterfall
+                     OA (%)                98.826±0.006         99.028±0.002         99.096±0.002           99.058±0.002        99.147±0.001         99.173±0.001
+                     AA (%)                96.856±0.026         97.021±0.012         97.106±0.008           97.238±0.008        98.423±0.005         97.881±0.008
+    Indian Pines
+                     κ (×100)              98.662±0.007         98.891±0.002         98.969±0.002           98.927±0.002        99.027±0.001         99.057±0.001
+                     time (s)                     7.866                7.904                7.995                  8.213                7.776               7.744
+                     OA (%)                99.582±0.001         99.508±0.001         99.432±0.002           99.379±0.002        99.546±0.001         99.596±0.001
+                     AA (%)                99.371±0.002         99.241±0.002         99.060±0.003           99.026±0.003        99.343±0.002         99.387±0.003
+ University of Pavia
+                     κ (×100)              99.447±0.001         99.347±0.001         99.247±0.003           99.177±0.003        99.398±0.002         99.464±0.002
+                     time (s)                   104.038               83.181               89.200                 81.097               87.892              83.477
+                     OA (%)                99.412±0.002         99.367±0.003         99.474±0.002           99.787±0.001        99.538±0.002         99.838±0.001
+                     AA (%)                99.490±0.001         99.505±0.001         99.529±0.002           99.732±0.001        99.596±0.001         99.772±0.001
+      Salinas
+                     κ (×100)              99.345±0.002         99.295±0.004         99.414±0.002           99.762±0.001        99.486±0.002         99.820±0.001
+                     time (s)                    43.851               44.850               45.254                 44.556               40.501              35.268
+
+                               Table 5: Comparison of CEGCN with different superpixel segmentation methods vs waterfall method
+
+                             Method          metric           ISIC skin           JSRT lung              JSRT heart        JSRT clavicle
+                                            DSC (%)        84.79±0.167          96.10±0.036           90.87± 0.033          85.98±0.049
+                              SLIC
+                                             time           5h 43m 48s          10h 41m 46s           10h 21m 47s             6h 8m 5s
+                                            DSC (%)        83.07±0.166          96.41±0.033            91.61±0.044          85.86±0.049
+                            Waterfall
+                                             time          10h 49m 8s            3h 14m 13s             3h 11m 55s           1h 34m 15s
+
+                             Table 6: SLIC superpixel semantic segmentation [2] vs waterfall-based semantic segmentation on GPU-c
+
+
+transforms, producing hierarchical segmentations of the image                            [12] V. Yeghiazaryan, et al., Path reducing watershed for the GPU, in: Proc
+with fewer and larger regions. We show the practical applica-                                 WACV, IEEE, 2018, pp. 577–585.
+                                                                                         [13] Y. Gabrielyan, et al., Parallel partitioning: path reducing and union–find
+tions of our waterfall algorithm as a replacement for superpixel                              based watershed for the GPU, in: Proc ICIP, IEEE, 2022, pp. 1501–1505.
+algorithms in DL pipelines, and show consistent training time                            [14] J. B. Roerdink, et al., The watershed transform: Definitions, algorithms
+alongside accuracy improvement.                                                               and parallelization strategies, Fundam Inform 41 (2000) 187–228.
+                                                                                         [15] M. Świercz, et al., Fast, parallel watershed algorithm based on path trac-
+                                                                                              ing, in: Proc ICCVG, Springer, 2010, pp. 317–324.
+References                                                                               [16] S. Wu, et al., Parallelization research on watershed algorithm, in: Proc
+                                                                                              ACAI, IET, 2012, pp. 1524–1527.
+ [1] Z. Li, et al., Superpixel segmentation using linear spectral clustering, in:        [17] B. Wagner, et al., Parallel volume image segmentation with watershed
+     Proc CVPR, IEEE, 2015, pp. 1356–1363.                                                    transformation, in: Proc SCIA, 2009, pp. 420–429.
+ [2] S. Li, et al., Superpixel-guided iterative learning from noisy labels for           [18] J. Van Neerbos, et al., Towards a parallel topological watershed: First
+     medical image segmentation, in: Proc MICCAI, Springer, 2021, pp. 525–                    results, in: Proc ISMM, Springer, 2011, pp. 248–259.
+     535.                                                                                [19] C. Kauffmann, et al., Cellular automaton for ultra-fast watershed trans-
+ [3] G. M. Tarhini, et al., Detection of brain tumor in mri images using wa-                  form on GPU., in: Proc ICPR, 2008, pp. 1–4.
+     tershed and threshold-based segmentation, Int J Signal Process Syst 8 (1)           [20] A. Körbes, et al., Advances on watershed processing on GPU architecture,
+     (2020) 19–25.                                                                            in: Proc ISMM, Springer, 2011, pp. 260–271.
+ [4] A. C. B. Monteiro, et al., Detecting and counting of blood cells using wa-          [21] M. Hučko, et al., Streamed watershed transform on GPU for processing
+     tershed transform: an improved methodology, in: Proc BTSym, Springer,                    of large volume data, in: Proc SCCG, 2012, pp. 137–141.
+     2019, pp. 301–310.                                                                  [22] P. Quesada-Barriuso, et al., Efficient GPU asynchronous implementation
+ [5] H. Xu, et al., Segmentation of bone vessels in 3d micro-ct images using                  of a watershed based on cellular automata, in: Proc ISPDPA, 2012, pp.
+     the monogenic signal phase and watershed, in: Proc ISBI, IEEE, 2020,                     79–86.
+     pp. 741–744.                                                                        [23] L. Pan, et al., Implementation of medical image segmentation in cuda, in:
+ [6] A. Tareef, et al., Multi-pass fast watershed for accurate segmentation of                In Proc ITAB, IEEE, 2008, pp. 82–85.
+     overlapping cervical cells, IEEE Trans Med Imaging 37 (9) (2018) 2044–              [24] C. Kauffmann, et al., Seeded ND medical image segmentation by cellular
+     2059.                                                                                    automaton on GPU, Int J Comput Assisted Radiol Surg 5 (2010) 251–262.
+ [7] A. Das, et al., Deep learning based liver cancer detection using watershed          [25] B. Wagner, et al., A parallel watershed-transformation algorithm for the
+     transform and gaussian mixture model techniques, Cognit Syst Res 54                      GPU, in: Workshop on Applications of Discrete Geometry and Mathe-
+     (2019) 165–175.                                                                          matical Morphology, 2010, pp. 111–115.
+ [8] M. Elbatel, et al., Seamless iterative semi-supervised correction of im-            [26] G. B. Vitor, et al., Fast image segmentation by watershed transform on
+     perfect labels in microscopy images, in: Proc MICCAI DART Wks,                           graphical hardware, in: Proc CILAMCE, Vol. 1, 2009, pp. 1–14.
+     Springer, 2022, pp. 98–107.                                                         [27] A. Körbes, et al., Analysis of the watershed algorithms based on the
+ [9] D. Eschweiler, et al., CNN-based preprocessing to optimize watershed-                    breadth-first and depth-first exploring methods, in: Proc SIBGRAPI,
+     based cell segmentation in 3D confocal microscopy images, in: Proc                       IEEE, 2009, pp. 133–140.
+     ISBI, IEEE, 2019, pp. 223–227.                                                      [28] G. B. Vitor, et al., Analysis of a step-based watershed algorithm using
+[10] F. Lux, et al., DIC image segmentation of dense cell populations by com-                 cuda, in: Nature-Inspired Computing Design, Development, and Appli-
+     bining deep learning and watershed, in: Proc ISBI, IEEE, 2019, pp. 236–                  cations, IGI Global, 2012, pp. 321–335.
+     239.                                                                                [29] P. Quesada-Barriuso, et al., Efficient 2D and 3D watershed on graphics
+[11] J. Jiang, et al., Accurate 3D cell segmentation using deep features and                  processing unit, Comput Electr Eng 39 (8) (2013) 2638–2655.
+     CRF refinement, in: Proc ICIP, IEEE, 2019, pp. 1555–1559.                           [30] S. Derivaux, et al., Supervised image segmentation using watershed trans-
+
+                                                                                    11
+     form, fuzzy classification and evolutionary computation, Pattern Recognit
+     Lett 31 (15) (2010) 2364–2374.
+[31] S. Beucher, Segmentation d’images et morphologie mathématique, Ph.D.
+     thesis, Ecole Nationale Supérieure des Mines de Paris (1990).
+[32] S. Beucher, Watershed, hierarchical segmentation and waterfall algo-
+     rithm, in: Proc ISMM, Kluwer Ac. Publ., 1994, pp. 69–76.
+[33] B. Marcotegui, et al., Fast implementation of waterfall based on graphs,
+     in: Proc ISMM, Springer, 2005, pp. 177–186.
+[34] S. M. Golodetz, et al., Two tree-based methods for the waterfall, Pattern
+     Recognit 47 (10) (2014) 3276–3292.
+[35] S. Beucher, et al., P algorithm, a dramatic enhancement of the waterfall
+     transformation (2009).
+[36] S. Beucher, Towards a unification of waterfalls, standard and P algorithms
+     (2013).
+[37] S. M. Golodetz, Zipping and unzipping: the use of image partition forests
+     in the analysis of abdominal CT scans, DPhil thesis, University of Oxford
+     (2010).
+[38] S. Golodetz, et al., Simpler editing of graph-based segmentation hierar-
+     chies using zipping algorithms, Pattern Recognit 70 (2017) 44–59.
+[39] S. Allegretti, et al., Optimized block-based algorithms to label connected
+     components on GPUs, IEEE Trans Parallel Distrib Syst 31 (2) (2020)
+     423–438.
+[40] J. Bush, C4L image dataset, accessed: 1/2/2022 (2021).
+     URL https://dx.doi.org/10.21227/bc9m-f507
+[41] P. Arbeláez, et al., Contour detection and hierarchical image segmenta-
+     tion, IEEE Trans Pattern Anal Mach Intell 33 (5) (2011) 898–916.
+[42] V. Yeghiazaryan, Parallel front propagation in medical image segmenta-
+     tion, DPhil thesis, University of Oxford (2018).
+[43] Nighttime swirls, accessed: 11/2/2022.
+     URL       https://earthobservatory.nasa.gov/images/145471/
+     nighttime-swirls
+[44] Q. Liu, et al., CNN-enhanced graph convolutional network with pixel-
+     and superpixel-level feature fusion for hyperspectral image classification,
+     IEEE Trans Geosci Remote Sens 59 (10) (2020) 8657–8671.
+[45] R. Achanta, et al., SLIC superpixels compared to state-of-the-art super-
+     pixel methods, IEEE Trans Pattern Anal Mach Intell 34 (11) (2012) 2274–
+     2282.
+[46] A. Vedaldi, et al., Quick shift and kernel methods for mode seeking, in:
+     Proc ECCV, Springer, 2008, pp. 705–718.
+[47] P. F. Felzenszwalb, et al., Efficient graph-based image segmentation, Int J
+     Comput Vision 59 (2) (2004) 167–181.
+[48] M. Van den Bergh, et al., Seeds: Superpixels extracted via energy-driven
+     sampling, in: Proc ECCV, Springer, 2012, pp. 13–26.
+[49] V. Yeghiazaryan, et al., Family of boundary overlap metrics for the eval-
+     uation of medical image segmentation, J Med Imaging 5 (1) (2018)
+     015006.
+
+
+
+
+                                                                                   12

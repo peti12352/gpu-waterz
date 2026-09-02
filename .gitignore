@@ -7,4 +7,6 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 papers/*.pdf
+papers/repos/
+tmp_sync/
 .cuda-nvrtc*

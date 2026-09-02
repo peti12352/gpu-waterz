@@ -1,0 +1,1016 @@
+                                                   Scaling Hierarchical Agglomerative Clustering to
+                                                                Billion-sized Datasets
+
+                                                Baris Sumengen                   Anand Rajagopalan                    Gui Citovsky
+                                                Google Research                   Google Research                    Google Research
+                                             sumengen@google.com                anandbr@google.com                gcitovsky@google.com
+arXiv:2105.11653v1 [cs.LG] 25 May 2021
+
+
+
+
+                                                  David Simcha                      Olivier Bachem                    Pradipta Mitra
+                                                 Google Research                    Google Research                  Google Research
+                                               dsimcha@google.com                 bachem@google.com                ppmitra@google.com
+
+                                                  Sam Blasiak                         Mason Liang                        Sanjiv Kumar
+                                                 Google Research                        0x Labs                         Google Research
+                                             samblasiak@google.com                mason@0xproject.com                 sanjivk@google.com
+
+
+                                                                                          Abstract
+                                                   Hierarchical Agglomerative Clustering (HAC) is one of the oldest but still most widely
+                                               used clustering methods. However, HAC is notoriously hard to scale to large data sets as the
+                                               underlying complexity is at least quadratic in the number of data points and many algorithms
+                                               to solve HAC are inherently sequential. In this paper, we propose Reciprocal Agglomerative
+                                               Clustering (RAC), a distributed algorithm for HAC, that uses a novel strategy to efficiently
+                                               merge clusters in parallel. We prove theoretically that RAC recovers the exact solution of HAC.
+                                               Furthermore, under clusterability and balancedness assumption we show provable speedups in
+                                               total runtime due to the parallelism. We also show that these speedups are achievable for certain
+                                               probabilistic data models. In extensive experiments, we show that this parallelism is achieved on
+                                               real world data sets and that the proposed RAC algorithm can recover the HAC hierarchy on
+                                               billions of data points connected by trillions of edges in less than an hour.
+
+
+
+                                         1    Introduction
+                                         The recent, unprecedented rise in large data sets has been largely fueled by the growth in unstructured
+                                         and unlabeled data. A fundamental method for attaching structure to these types of datasets is
+                                         through clustering, and advancing the state of the art in clustering continues to attract both practical
+                                         and theoretical interest. Despite many advances, scaling clustering methods to massive data sets
+                                         remains a hard task.
+                                         Hierarchical Agglomerative Clustering (HAC) is one of the oldest but still most widely used clustering
+                                         methods. Starting from a state in which every datapoint is in its own cluster, it successively merges
+                                         pairs of clusters together to produce a hierarchy. The popularity of HAC stems from its ease of
+                                         implementation coupled with a variety of useful properties. Unlike popular parametric methods
+                                         such as k-Means, HAC can generate flat clusterings by halting the merging process at a desired
+                                         point, rather than requiring the number of clusters to be specified in advance. HAC’s non-parametric
+                                         nature also frees the user from the need to make assumptions about data distributions. Parametric
+                                         clustering approaches can fail in high dimensional spaces since the underlying geometric shapes, i.e.,
+
+
+                                                                                              1
+                                       Table 1: Linkage functions
+
+                                Definition                 Update formula
+                   Single       mina∈A,b∈B Wa,b            min(W (A, C), W (B, C))
+                   Complete     maxa∈A,b∈B Wa,b            max(W (A, C), W (B, C))
+                                P                           |A|W (A,C)+|B|W (B,C)
+                   Average        a∈A,b∈B Wa,b /|A||B|             |A|+|B|
+
+
+
+Voronoi partitions in the case of k-Means, become meaningless. HAC is also easily tunable through
+the use of different “linkage functions” that control how dissimilarities are updated when clusters
+merge. Finally, HAC enjoys the reputation for producing quality clusterings, and this behavior
+recently gained theoretical support [Moseley and Wang, 2017].
+Scaling HAC has proven to be challenging. The sequentiality and random memory access requirements
+of HAC make it hard to parallelize computation, a critical aspect where data sets do not fit on a single
+machine. Previous efforts have been limited to inputs containing at most hundreds of thousands
+of datapoints [Jeon and Yoon, 2015]. Single linkage HAC is the exception because of its unique
+connection to the minimum spanning tree problem [Rammal et al., 1985], but has the drawback that
+it produces hierarchies which are highly sensitive to outliers [Williams and Lambert, 1966]. Another
+scalable approach to hierarchical clustering is affinity clustering [Bateni et al., 2017], which is capable
+of scaling to billions of datapoints, but produces hierarchies which differ from HAC.
+We start with a brief introduction to HAC in Section 2. In Section 3 we describe a massively scalable
+HAC algorithm (Algorithm 2), which we call Reciprocal Agglomerative Clustering (RAC). RAC
+computes the exact HAC hierarchy for any reducible linkage (defined in Section 2, examples include
+average and complete linkage), and is scalable to billions of datapoints connected by trillions of edges.
+In Section 4, we give a rigorous proof of its correctness in Theorem 1. We note that while idea of
+merging reciprocal nearest neighbors appears in Murtagh [1983], there is no proof of correctness,
+speedup theory, or any details on parallel implementation. We next give a negative example (Theorem
+4) where RAC’s parallelism does not guarantee speedup. We complement this result however by
+giving theoretical guarantees of runtime speedups in two scenarios: (i) Assuming the datapoints
+satisfy a notion of stability as defined in Awasthi et al. [2014], and (ii) An average-case analysis
+of speedup when the graph of the data is an instance of a natural class of random graph models.
+We provide details of our implementation in Section 5, and in Section 6 we use RAC to cluster
+billion-sized real world data sets and give scaling results with respect to CPUs and machines.
+
+
+2    Hierarchical Agglomerative Clustering
+Hierarchical agglomerative clustering (HAC) produces a hierarchy of clusters, providing relationships
+between groups of datapoints at increasingly granular levels. An important parameter of this
+algorithm is the linkage function, which we will denote as W , which defines the dissimilarity between
+two clusters of datapoints as a function of the dissimilarities between their constituent elements.
+Many commonly used clustering algorithms, e.g. SLINK [Sibson, 1973], CLINK [Defays, 1977], and
+UPGMA [Sokal, 1958] correspond to HAC with a specific linkage function. The three previously
+mentioned algorithms use single, complete, and average linkages, which are defined in Table 1.
+Starting from a state in which every data point is in a singleton cluster, HAC creates a hierarchy by
+sequentially combining the two clusters which are most similar according to the linkage function.
+This process is repeated until all of the original data points have been coalesced into a single cluster,
+and the unordered list of mergers, representing the cluster hierarchy, is returned (Algorithm 1).
+The linkage functions defined in Table 1 all belong to the more specific class of reducible, Lance-
+Williams [Lance and Williams, 1967] linkage functions. These linkage functions have the property
+that the dissimilarities between clusters may be computed recursively in terms of dissimilarities
+
+
+                                                    2
+Algorithm 1 Hierarchical Agglomerative Clustering (HAC)
+Require: Set of clusters, C, and a set of merges, M, with default value ∅
+ 1: if |C| = 1 then
+ 2:    Return M
+ 3: end if
+ 4: A, B ← Pair of distinct clusters in C which minimize W (A, B)
+ 5: C ← {A ∪ B} ∪ C \ {A, B}
+ 6: M ← M ∪ {{A, B}}
+ 7: Return HAC(C, M)
+
+
+
+between their refinements, i.e. given clusters A, B, and C, along with all their pairwise dissimilarities,
+we can compute W (A ∪ B, C) in O(1) time rather than by iterating over all of individual pairs of
+datapoints in the two sets, which would require O(|C|(|A| + |B|)) time.
+Reducible linkage functions have the property that merging two clusters does not make the resulting
+union more similar to any other cluster, i.e. for any three disjoint clusters A, B, and C, W (A∪B, C) ≥
+min(W (A, C), W (B, C)). Centroid linkage, where the dissimilarity between clusters is the distance
+between their centroids, is an example of a linkage function which is not reducible. If the linkage
+function used in HAC is reducible, then the dissimilarities between the clusters which are being
+merged in Algorithm 1 will be non-decreasing.
+There has been work on parallelizing portions of the HAC algorithm in the past. Cathey et al.
+[2007] keep the merges sequential but parallelizes the work done in each merge, e.g. finding the least
+dissimilar clusters and updating the cluster dissimilarities. Jeon and Yoon [2015] parallelizes the
+nearest neighbor chain algorithm [Murtagh, 1984] by using multiple threads to follow different chains
+but collisions between these chains could potentially create thread contention. In both cases, the
+algorithms were demonstrated on single machines for datasets with under a million datapoints.
+
+
+3    Reciprocal Agglomerative Clustering
+When the HAC procedure is run using a reducible linkage function, the order in which clusters are
+merged can be relaxed [De Rham, 1980, Murtagh, 1983, Rasmussen and Willett, 1989]. In particular,
+rather than merging the pair of clusters whose dissimilarity globally minimizes W (A, B), with a
+reducible linkage function, it is possible to merge any pair of clusters, A and B, that are reciprocal
+nearest neighbors. Reciprocal nearest neighbors are clusters that are nearest neighbors of one another,
+i.e., there exists no other cluster C ∈ C such that W (A, C) < W (A, B) or W (B, C) < W (A, B). The
+key idea behind the nearest neighbor chain algorithm is to follow the nearest neighbor graph to
+identify such reciprocal nearest neighbors and to sequentially merge them.
+Inspired by this idea of reciprocal nearest neighbors, we propose a distributed algorithm called
+Reciprocal Agglomerative Clustering (RAC) to scale HAC to billions of data points. We describe a
+high level overview of RAC in this Section. RAC proceed in rounds where in each round, we merge
+all reciprocal nearest clusters in parallel on a set of machines instead of sequentially following a
+nearest neighbor chain.
+Algorithm 2 presents a high level overview of RAC. Each round of RAC proceeds in two phases of
+finding reciprocal nearest neighbors and merging them, each of which is parallelized. The merge phase
+may be further subdivided into updating cluster dissimilarities and updating nearest neighbors (see
+Section 5 for a full distributed implementation).
+1. Find Reciprocal Nearest Neighbors: Given a set of clusters C, we find and return in parallel
+all merges: pairs of clusters {Ci , Di } such that Ci ’s nearest neighbor is Di and vice-versa.
+2a. Update Cluster Dissimilarities: Once we merge the pairs of reciprocal nearest neighbor
+clusters, we update in parallel the dissimilarities of all pairs of clusters that have been changed and
+
+
+                                                    3
+delete the original clusters that were merged.
+2b. Update Nearest Neighbors: For each cluster C that belongs to a reciprocal nearest neighbor
+pair, and for each of C’s neighbors N , we find and update in parallel the new nearest neighbor
+of N (since after merging C with its reciprocal nearest neighbor, C may no longer be N ’s nearest
+neighbor).
+
+Algorithm 2 Reciprocal Agglomerative Clustering (RAC)
+ 1: Require: Set of clusters, C, and a set of merges, M, with default value ∅
+ 2: M ← M ∪ Find Reciprocal Nearest Neighbors(C)
+ 3: Update Cluster Dissimilarities(C)
+ 4: Update Nearest Neighbors(C)         Merge
+ 5: Return RAC(C, M)
+
+
+
+4     Theoretical Results
+In this section we first prove the correctness of RAC. RAC, as we have seen, proceeds in rounds,
+where each round performs a set of parallel merges. RAC can hope to perform significantly better
+than sequential implementations of HAC only if the number of rounds is significantly smaller than n
+(the number of input datapoints). We first present a negative example showing that in the worse case,
+RAC can take O(n) rounds even when the cluster tree is of depth O(log n) (intuitively, a case with
+high parallelism). We then complement this by giving theoretical guarantees in two scenarios where
+the number of rounds is O(log n): We provide a characterization where the number of rounds of
+RAC is the same as the tree height, providing an explanation of its excellent performance in practical
+scenarios. We also show that RAC can achieve a provable average-case speedup in a probabilistic
+setting when the edges of the data are drawn from a random graph model. Lastly we provide a
+connection between the number of merges per-round and the overall complexity of RAC, proving
+that RAC can perform in near linear time under reasonable assumptions (in the experimental section
+we provide empirical proof that these assumptions are reasonable for many real applications).
+
+
+4.1    Proof of Correctness
+
+We start with the correctness proof, showing that given a reducible linkage and a set of clusters C,
+HAC(C) = RAC(C). The main idea in this proof is that at any state of HAC, there exists a set of
+pairs of clusters that are reciprocal nearest neighbors. We will first show that given a pair of clusters
+that are reciprocal nearest neighbors, HAC will merge them. We then show that the order in which
+HAC merges these reciprocal nearest neighbors does not matter. The combination of these results
+implies that all reciprocal nearest neighbors may be merged in parallel, with the resultant clusters
+matching the ones produced by HAC.
+Theorem 1. For reducible linkages W , Hierarchical Agglomerative Clustering and Reciprocal Ag-
+glomerative Clustering produce the same result. That is, for a set of clusters C, HAC(C) = RAC(C).
+
+Proof. We prove this by strong induction on |C|. The claim holds for |C| = 1. We will use the
+following two lemmas:
+Lemma 2. Let clusters A, B ∈ C be a pair of reciprocal nearest neighbors and let  = W (A, B).
+Then the merge between A and B, [A, B], will appear in HAC(C).
+
+Proof. Let C ∗ be any non-empty subset of C which does not contain A or B and let D be the union
+of all the clusters in C ∗ . Using the fact that W is reducible and that  < W (A, X) for any X ∈ C
+that is not A or B, we have that W (A, D) = W (A, ∪X∈C ∗ X) ≥ minX∈C ∗ (W (A, X)) > . This strict
+inequality means that A cannot merge with D while B is still unmerged. A similar argument applies
+
+
+                                                   4
+to B. Since all clusters in C will eventually be merged, the only possibility remaining is that A and
+B will be merged.
+
+We now show that the order in which HAC merges reciprocal nearest neighbors in C does not matter.
+Lemma 3. Let A, B ∈ C be two clusters which are merged at some point in HAC(C). Let C 0 =
+{A ∪ B} ∪ C \ {A, B}. Then HAC(C, M) = HAC(C 0 , M ∪ [A, B]).
+
+
+                                        HAC(C, M)              HAC(C 0 , M ∪ [A, B])
+
+
+                                      C10            C20        C1
+                                            Step j                            C2
+                                                                     Step j
+                                            C1 C2
+                                                                 A∪B          C20
+                                      A              B
+
+                    Figure 1: Step j in HAC(C, M) and in HAC(C 0 , M ∪ [A, B])
+
+Proof. Let Ck (resp. Ck0 ) be the set of clusters produced after k iterations of HAC(C) (resp.
+HAC(C 0 , M ∪ [A, B])). Let s be the iteration in which the merge between A and B occurs in
+HAC(C). We will now show that Cs = Cs0 .
+Suppose by contradiction that Cs =   6 Cs0 . Consider the first iteration j < s in the respective procedures,
+s.t. Cj 6= Cj . Let (C1 , C2 ) (resp. (C10 , C20 )) be the clusters that were merged in the creation of Cj
+              0
+
+(resp. Cj0 ), where C1 ∪ C2 =6 C10 ∪ C20 . Since Cj−1 = Cj−1
+                                                           0
+                                                               \ {A ∪ B} ∪ {A, B}, it must be the case that
+  0                 0
+C1 = A ∪ B or C2 = A ∪ B (see Figure 1).
+Suppose without loss of generality that C10 = A ∪ B. We know that W (A ∪ B, C20 ) < W (C1 , C2 )
+since otherwise C1 and C2 would have merged in the creation Cj0 (right side of Figure 1). Further,
+we know that W (C1 , C2 ) < W (A, C20 ) since otherwise A and C20 would have merged in the creation
+of Cj (left side of Figure 1). By similar logic, we have that W (A ∪ B, C20 ) < W (B, C20 ). Thus,
+W (A ∪ B, C20 ) < min(W (A, C20 ), W (B, C20 )), a contradiction to W being reducible.
+
+
+
+To finish the proof of Theorem 1, assume |C| ≥ 2. Let R = {R1 , R2 , R3 , R4 , . . . }, be a set of
+clusters in C where {R2i−1 , R2i }, i = 1, 2, 3, . . . are reciprocal nearest neighbor pairs. Let R0 =
+{R1 ∪ R2 , R3 ∪ R4 , . . . } be their unions. By repeatedly applying the results from the above two
+lemmas, the inductive hypothesis and finally, using the definition of RAC, we get that
+
+                          HAC(C) = HAC(R0 ∪ C \ R, {[R1 , R2 ], [R3 , R4 ] . . . })
+                                   = RAC(R0 ∪ C \ R, {[R1 , R2 ], [R3 , R4 ] . . . })
+                                   = RAC(C)
+
+
+
+
+4.2    Speedup guarantees
+
+We start by analyzing the number of merge rounds required by RAC. First, a negative result. Clearly,
+the number of rounds RAC requires is bounded from below by the height of the resulting dendrogram.
+One might hope that this bound is tight, in which we can use the tree height to characterize the
+parallelism inherent in a clustering problem. However, we show below there are inputs which require
+O(n) rounds of RAC, even though the resulting dendrogram has only O(log(n)) height.
+
+
+                                                           5
+Theorem 4. For any n ∈ N, set X = {1 + , 2 + 4, 3 + 9, . . . , 2n + 22n }, where  = 2−4n . Then
+RAC(X) returns a dendrogram of height n, but requires Ω(2n ) rounds of reciprocal nearest neighbor
+merges to complete. [Proof in supplementary materials.]
+
+
+4.2.1   Stable Trees
+
+Notwithstanding this negative result, we can show that if the average linkage cluster tree has certain
+"clusterability" properties, then the number of rounds RAC requires is the same as the tree height.
+In Awasthi et al. [2014], the authors introduce clusterability notion for flat clusters called stability.
+We adapt this definition for cluster trees as follows:
+
+Definition 1. A given cluster tree T is stable if for any non-overlapping nodes X, Y ∈ T (i.e. the
+set of leaves of X and Y have empty intersection), and any A ⊂ X, B ⊆ Y d(A, X \ A) < d(A, B)
+Theorem 5. On stable cluster trees, RAC completes in a number of rounds equal to the tree height.
+
+Proof. Let the set of datapoints in the cluster tree be P , and h be the height of the tree. Define
+ρ(X) to be the parent of X in the cluster tree. Define a Leveled Clustering at level l, Cl for 0 ≤ l < h
+of the tree recursively as follows: for a level l, let Ml = {X ∈ Cl : ∃Y ∈ Cl , ρ(X) = ρ(Y )}, i.e., nodes
+in Cl that merge with another node in Cl , and let
+                               (
+                                 P,                                     if l = 0
+                         Cl =
+                                 Cl−1 \ Ml−1 ∪ {ρ(X) : X ∈ Ml−1 }, otherwise
+
+We claim that the state of the RAC algorithm after l rounds of merging is Cl . Note that this implies
+that the number of rounds required is h, proving the theorem. Let us prove this recursively, the base
+case being obvious. For the inductive step, assume the cluster state is Cl . Let |Ml | = 2·M for an integer
+M (it is clear that |Ml | is even) and let the members of Ml be m0 , m1 . . . m2M −1 . Assume without
+loss of generality that m2i and m2·(i+1) are siblings (for all i ≤ M − 1), i.e., ρ(m2i ) = ρ(m2(i+1) ).
+Since we know that RAC produces the correct cluster tree, all we need to demonstrate is that all
+m2i and m2·(i+1) get merged simultaneously in the next step of RAC, or equivalently, that m2i and
+m2·(i+1) are reciprocal nearest neighbors. Take any other node Y ∈ Cl . Set X = m2i ∪ m2·(i+1) ,
+A = m2i and B = Y , and by the definition of stability, we see that d(m2i , m2i+1 ) < d(m2i , Y ). The
+same argument can be shown to imply that d(m2i , m2i+1 ) < d(m2i+1 , Y ) and thus m2i and m2·(i+1)
+are reciprocal nearest neighbors.
+
+
+4.2.2   Probabilistic setting
+
+We can extend the conclusion of Theorem 5 to probabilistic settings which do not require the
+assumption of stability for the case of single linkage. In particular, we present a probabilistic
+graphical model in which the expected number of merges in each round is a constant fraction of
+the number of clusters in that round. Moreover, we show that this implies that RAC terminates in
+O(log n) rounds both in expectation and with high probability. We start with a proof of the latter
+result.
+Theorem 6. Fix integer n > 0 and real α > 0. Let (Xk )k≥0 be a sequence of random variables with
+X0 = n and Xk+1 = 1 if Xk = 1 and Xk+1 = Xk − Zk otherwise, with Zk satisfying the following
+conditions:
+  (i) Zk is integer valued and 1 ≤ Zk ≤ Xk − 1 and
+ (ii) E[Zk |Xk ] ≥ αXk .
+Let τ = arg mink {Xk = 1}. Then τ = O(log n) in expectation and with high probability.
+
+
+
+                                                    6
+The application of Theorem 6 to RAC is as follows: Let Xk be the number of clusters and Zk be the
+number of merges in round k respectively. Then, if we can show that at least α fraction of merges
+occur in each round in expectation, then RAC terminates in O(log n) rounds of merges.
+
+Proof. Begin by letting Yk = Xk /(1 − α)k . We use the optional stopping theorem Doob [1953] applied
+to the Yk ’s to prove the result. In this context, the theorem states that if (a) τ is bounded and (b)
+E[Yk+1 |Yk ] ≤ Yk , then E[Yτ ] ≤ E[Y0 ] = n. Assuming for now that (a) and (b) hold, by Jensen’s
+inequality, E[Yτ ] = E[1/(1 − α)τ ] ≥ 1/(1 − α)E[τ ] which gives E[τ ] ≤ log n/ log(1/(1 − α)). The high
+probability guarantee follows from Markov’s inequality:
+                                                log n
+                         P [τ > (1 + β)                   ] = P [1/(1 − α)τ > n1+β ]
+                                           log(1/(1 − α))
+                                                             ≤ E[1/(1 − α)τ ]/n1+β
+                                                             ≤ n1−β .
+
+We turn to proving (a) and (b). To see (a), note that by condition (i), Xk decreases by positive
+integer values in each round, and hence τ ≤ n − 1. (b) follows from the following calculation.
+
+                               E[Yk+1 |Yk ] = E[Yk+1 |Xk ]
+                                             = (1/(1 − α)k+1 )E[Xk+1 |Xk ]
+                                             = (1/(1 − α)k+1 )E[Xk − Zk |Xk ]
+                                             ≤ (1/(1 − α)k+1 )Xk (1 − α)
+                                             = Yk .
+
+
+
+
+We now apply this result to two probabilistic settings.
+Single Linkage, 1-dimensional grid: Consider points {x1 , x2 , . . . , xn } on the real axis with
+x1 < x2 < . . . < xn such that the dissimilarities between consecutive points are sorted uniformly at
+random. Such a model can be generated by choosing the xi ’s iid on the unit interval [0, 1] and then
+relabeling them in increasing order. Suppose after some number of rounds, k clusters C1 , C2 , . . . , Ck
+remain with k > 2. It is clear that each Ci consists of a subset of points with contiguous indices,
+thus Ci = {xji , xji +1 , . . . , xji +ni }. Denoting the dissimilarity between Ci and Ci+1 by d(Ci , Ci+1 ),
+the probability that Ci merges with Ci+1 is then given by P [d(Ci , Ci+1 ) < d(Ci−1 , Ci )] if i =
+k − 1, P [d(Ci , Ci+1 ) < d(Ci+1 , Ci+2 )] if i = 2, and P [d(Ci , Ci+1 ) < min(d(Ci−1 , Ci ), d(Ci+1 , Ci+2 ))]
+otherwise. Under the assumption of randomly sorted edge weights, this simplifies to
+                                                         (
+                                                           1/3      if i = 2, 3, . . . , k-2
+                          P [Ci merges with Ci+1 ] =
+                                                           1/2      if i = 1 or i = k-1.
+
+By linearity of expectation, the number of merges is at least k/3 (if k = 2, then a single merge occurs
+which also satisfies this). Thus, we can apply Theorem 6 with α = 1/3.
+Single Linkage, Bounded Degree Probabilistic Graph: We can generalize the previous result
+as follows. Let G = (V, E) be a weighted graph on n vertices with the weights sorted at random and
+each vertex initially being a singleton cluster. Let E(Ci , Cj ) denote the edges between clusters Ci
+and Cj . In a given round, the pair of clusters Ci and Cj merge if
+
+                              min        e < min(min     min         e, min    min         e),
+                          e∈E(Ci ,Cj )           l6=j e∈E(Ci ,Cl )     l6=i e∈E(Cl ,Cj )
+
+
+i.e. according to the Single Linkage rule. Suppose that after some number of rounds, k clusters
+remain. We can compute the expected number of merges as follows. Let dij = |E(Ci , Cj )| and let
+
+
+                                                        7
+       P
+di =   j6=i dij . Then the probability that Ci and Cj merge is given by
+
+                                                       dij
+                                          Pij =                 .
+                                                  di + dj + dij
+                                                                                        Pk Pk
+By linearity of expectation, the expected number of merges is given by M (G) = i=1 j=i+1 Pij .
+Now suppose that the cluster graph is of bounded degree, i.e., di ≤ d = O(1) (as mentioned before,
+this is a reasonable assumption and supported by experiments). Note that since eventually all clusters
+merge, di ≥ 1 for all i. Thus, |{{i, j}|dij ≥ 1}| ≥ k −1. For each such (i, j), Pij ≥ 1/(di +dj ) ≥ 1/(2d)
+from which we have M (G) ≥ (k − 1)/(2d) ≥ k/(4d) and Theorem 6 applies with α = 1/(4d).
+
+
+4.3    Runtime analysis
+
+We now study the time complexity of RAC which depends on the number of rounds and the complexity
+of each round. In each round, the algorithm needs to: a) Find reciprocal nearest neighbors b) Perform
+the resultant merges c) Update nearest neighbors for every remaining cluster. Finding the reciprocal
+nearest neighbors for every cluster is O(n) operation, totaling O(n2 ) over all rounds. Merging a pair
+costs O(n), and there are O(n) merges across all rounds, gaining another O(n2 ). Finally, recomputing
+nearest neighbors is a O(log n) operation if we use a min-heap. However, in practice, we simply
+iterate over a unsorted list in O(n) (due to its improved cache-locality whose benefits outweighs the
+theoretical downsides). Nevertheless, this gives us O(n2 ) cost per-round for an overall cost of O(n3 ),
+which is rather large. However, this makes really worst-case assumptions about the number of merges
+and character of the data distribution that do not hold in practice. In particular, as we will see in
+practice in the experimental section, many merges happen simultaneously and the number of rounds
+are much smaller than n. We characterize this in the following theorem.
+Theorem 7. Assume that a constant α fraction of nodes are merged in each round. Then, RAC
+runs in expected time O(n2 ) (as opposed to O(n3 )).
+
+Proof. Let the runtime be f (n). Then we have the following:
+                                       update nearest neighbors
+                              merges      z      }|       {
+                              z }| {            α  2                α 
+                      f (n) ∝ αn · n +       1−        n        +f 1 −        n
+                                                   2                      2
+                                                     ∞
+                                             α 2 X            α i
+                            ≤ n2 α + 1 −                    1−        = O(n2 ).
+                                              2       i=0
+                                                                 2
+
+
+
+In view of the probabilistic models in the Subsection 4.2.2, we have a probabilistic analog of Theorem
+7:
+Theorem 8. For the probabilistic graph model of Subsection 4.2.2 with an expected constant fraction
+of nodes merging in each round, RAC runs in expected time O(n2 ). [Proof in supplementary materials.]
+
+
+Now we argue that under reasonable assumptions, the runtime of the distributed algorithm can be
+nearly linear. Consider a problem with n datapoints where every cluster has a degree bounded by k
+(for large datasets this is a reasonable assumption – See Section 6). Consider a round in which m
+merges occur. Then there are O(min(n, m · k)) non-merging nodes that have their neighborhoods
+changed. Assume a fraction, β, of these have their nearest neighbor updated (equivalently, their
+nearest neighbor was merged). Each of these need O(k) time to find the new nearest neighbor. Then
+the run-time of RAC can be decomposed as in Table 2.
+It is clear that for efficient runtimes we want m to be large and β to be small. Assume as before
+that m = α · n. Then the complexity of the ith round (following arguments similar to Theorem 7) is
+
+
+                                                     8
+                            Table 2: Breakdown of run-times into phases.
+
+                                                           Main
+                   Algorithm step                                     Run-time
+                                                         resource
+                   Find reciprocal nearest neighbors     Network      O(n)
+                   Send neighborhoods for mergers        Network      O(m · k)
+                   Merge                                 Compute      O(m · k)
+                   Get info for non-merge updates        Network      O(m · k)
+                   Non-merge updates                     Compute      O(m · k)
+                                                                      O(β·
+                   Update nearest neighbors              Compute
+                                                                      min(n, mk 2 ))
+
+
+O(α · n · k + αβnk 2 ). If β = O(k −1 ) then the total run time will be O(n · k). This assumption on β
+means that a merge pair can change at most a constant number of their neighbors nearest neighbor.
+We show experimental support for this assumption in the next section. Assuming a parallelism factor
+of P (in the form of machines/CPU etc), we can state the following:
+Theorem 9. If α = Ω(1) (constant fraction of nodes merge in each round) and β = Θ( k1 ) (a merge
+pair changes at most a constant number of non-merging nodes nearest neighbors), then the runtime
+of RAC with P parallelism factor is O( n·k
+                                        P ).
+For very large datasets k is often bounded by a few hundred or thousands, and P can scale up to
+many hundreds. Thus in practical situations, we can often hit nearly linear time performance with
+RAC.
+
+
+5    Implementation
+In this section, we provide a detailed implementation of RAC. In RAC, clusters are distributed across
+machines and have the following methods and attributes: id - a unique numeric identifier for the cluster,
+will_merge - a boolean flag which indicates whether the cluster will be merging in the current round,
+nn (abbreviation for nearest_neighbor) - a cached reference to the closest cluster, neighbors - the
+set of clusters with dissimilarities to the current cluster, update_dissimilarity(other_cluster,
+new_dissimilarity) - updates the stored dissimilarity value between this cluster and the other cluster
+to new value, get_dissimilarity(other_cluster) - returns the cached value of the dissimilarity
+between this cluster and the other cluster, and update_nearest_neighbor() - iterates over this
+cluster’s neighbors to find and cache the reference to the neighboring cluster that this cluster is
+closest to.
+In each round of RAC, we first find all reciprocal nearest neighbors and then perform the merges in
+parallel. These steps are repeated until no merges are possible. Between each step, we wait for all
+machines to finish.
+We perform these parallel merges efficiently by avoiding contention as follows: for parallel merging
+clusters, A ∪ B and C ∪ D, the value of W (A ∪ B, C ∪ D) will be computed twice, once for A ∪ B
+and once for C ∪ D. However, neither process needs to wait on the other. In practice, we find that
+this results in much greater throughput.
+When two clusters are to be merged, the machine owning the cluster with the lower id will be
+responsible for the merge operation and will own the merge result. In practice, the cluster with the
+lower id will be overwritten by the merge result, and the cluster with the higher id will be deleted.
+Because the clusters are sharded over machines, information about a cluster’s nearest neighbor, such
+as its nearest neighbor, can typically only be found via a remote call. Rather than blocking on this,
+we buffer remote calls and only issue them in batches. This allows us to pipeline the computation and
+communication processes, which in turn allows us to scale the number of machines. For simplicity,
+Algorithm 2 does not show batching of remote calls.
+
+
+                                                   9
+Algorithm 2, along with the following procedures used in the algorithm, provide a full implementation
+of RAC.
+
+                              Find Reciprocal Nearest Neighbors
+ 1: Require: Set of clusters, C
+ 2: M ← ∅ {Set of merges to return}
+ 3: if |C| = 1 then
+ 4:    Return M
+ 5: end if
+ 6: while C ∈ C do
+ 7:   C.will_merge← C.nn.nn is C
+ 8: end while
+ 9: for C ∈ C : C.will_merge and C.id < C.nn.id do
+10:   M ← M ∪ {{C, C.nn}}
+11: end for
+12: Return M
+
+
+                                 Update Cluster Dissimilarities
+ 1: Require: Set of clusters, C
+ 2: while C ∈ C : C.will_merge and C.id < C.nn.id do
+ 3:  N ←∅
+ 4:  for all C 0 ∈ C.neighbors ∪ C.nn.neighbors do
+ 5:     if C 0 .will_merge and C 0 .id < C 0 .nn.id then
+ 6:        w ← W (C ∪ C.nn, C 0 ∪ C 0 .nn)
+ 7:        C.update_dissimilarity(C 0 , w)
+ 8:        N ← N ∪ {C 0 }
+ 9:     else if not C 0 .will_merge then
+10:        w ← W (C ∪ C.nn, C 0 )
+11:        C.update_dissimilarity(C 0 , w)
+12:        N ← N ∪ {C 0 }
+13:     end if
+14:   end for
+15:   C.neighbors ← N
+16: end while
+17: while C ∈ C : C.will_merge and C.id > C.nn.id do
+18:   Delete C
+19: end while
+20: while C ∈ C : C.will_merge do
+21:   for all C 0 ∈ C.neighbors do
+22:     C 0 .update_dissimilarity(C, C.get_dissimilarity(C 0 ))
+23:   end for
+24: end while
+
+
+                                   Update Nearest Neighbors
+ 1: Require: Set of clusters, C
+ 2: while C ∈ C do
+ 3:  if C.will_merge or C.nn.will_merge then
+ 4:     C.update_nn()
+ 5:  end if
+ 6: end while
+
+
+
+
+                                                  10
+6    Experimental evaluation
+In this section we experimentally evaluate RAC’s scalability. In particular, since RAC produces
+the same hierarchy as HAC, we do not compare RAC’s output to any other clustering algorithms.
+We run our experiments on a modern cloud infrastructure with access to hundreds of multi-core
+machines connected by a fast network. In all experiments below, we share the run-times in a relative
+scale or as speedup compared to a baseline. We first demonstrate the validity of our assumptions
+by investigating the merge characteristics on real datasets. Next we show that RAC can scale to
+very large real datasets (eg. 1B nodes and 1T edges). We demonstrate that RAC effectively uses
+the parallelism available to it by running experiments with different machine/CPU configurations.
+Finally, we analyze the runtime of the merging phase of RAC, giving insights into its performance
+characteristic.
+
+                                         Table 3: Datasets
+
+                           Dataset            Nodes    Edges     Distance
+                           SIFT1B             1B       720B      l2
+                           SIFT1M             1M       1T        l2
+                           SIFT200K           200K     40B       l2
+                           WEB88M             88M      392B      Cosine
+                           News20             18846    355M      Cosine
+                           RCV1 (training)    23149    0.5B      Cosine
+
+
+We study datasets of objects represented as vectors and construct graphs on them using a suitable
+distance metric. Our datasets are listed in Table 3. News20 [Lang, 1995] and RCV1 [Amini et al.,
+2009] are well known medium sized datasets. While they are too small for RAC’s benefits to be
+visible, we use them to study the possibilities of parallelism in RAC. We use the large SIFT datasets
+[Jégou et al., 2011] and WEB88M to demonstrate the scaling capacities of RAC. Note that the last
+SIFT dataset (SIFT200K) was constructed for this work by sampling randomly from the SIFT1M
+dataset. We generated WEB88M by crawling popular web pages and generating bag of words sparse
+features.
+To demonstrate that RAC indeed enables agglomerative clustering at unprecedented scales, we cluster
+datasets whose sizes are toward the limits of available infrastructure. We experiment with both a)
+complete graphs on the datasets b) sparse graphs (i.e. graphs with (much) fewer than n2 edges).
+These sparse graphs are constructed by keeping first k nearest neighbors or only neighbors within
+an  ball. In particular, SIFT1M is complete while SIFT1B is sparse. The sparse graph setting is
+common in practical applications.
+Merge Characteristics (α and β): Recall that RAC proceeds in rounds, merging a number of
+reciprocal nearest neighbors simultaneously. Figure 2 shows the number of merges per round for 4
+datasets, demonstrating high parallelism (specially for initial rounds). What perhaps is non-intuitive
+is hump for the SIFT datasets suggesting that RAC goes through a bottleneck before finding
+opportunities for parallelism again. For News20 and RCV1 dataset, we also show (Figure 2 (a)) that
+the number of nearest neighbor updates per merge is bounded. Recall that this was an important
+part of our complexity analysis in Theorem 9 (formulated as parameter β).
+Experiments on Large Datasets: Table 4 shows representative timings for the 4 large datasets
+we achieved for complete linkage. We have specified run times normalized relative to WEB88M’s
+runtime, but note that all experiments finished in under a few hours. The times presented are for
+merging only and do not include time to load the edges from disk. Edge loading accounts for 15% to
+50% of the total run time in these datasets.
+A few observations about the results in Table 4. First, the number of merge rounds for all datasets
+are small compared to the size of the dataset, providing further support of the efficacy of the RAC
+approach. We note that the complete graphs register slower timing (compare SIFT1M vs SIFT1B),
+which is not surprising since the neighborhoods shuttling across the network is much larger. In Figure
+
+
+                                                 11
+Figure 2: Merge characteristics: a) Number of nearest neighbor updates per merge for News20 and
+RCV1 b) Number of merges per round for News20 and RCV1. c) and d) Number of merges per
+round for SIFT1B and SIFT1M respectively.
+
+                         Table 4: Performance of RAC on large datasets.
+
+           Metric                   WEB88M         SIFT1B      SIFT1M       SIFT200K
+           # of Machines            80             200         200          120
+           CPUs/Machine             16             16          8            4
+           Merges                   69M            490M        1M           200K
+           Merge Rounds             170            182         124          112
+           Merge Time (relative)    1.0            2.0         32.0         9
+
+
+3 we demonstrate how RAC scales with access to more machines and CPUs, showing that the RAC
+algorithm is able to effectively use parallelism in the algorithm and the infrastructure to solve HAC
+at scale.
+Finally, let us dig a bit deeper into the merge phase of the algorithm. We already mentioned that
+neither compute nor network dominates the run-time. This indicates that the merge phase, which
+
+
+                                                 12
+Figure 3: Improved runtimes with increased machines and CPU in Figures 3(a-c). Figures 3(a) and
+3(b) show how runtime improves with number of machines for SIFT200K and SIFT1B datasets
+respectively. Figures 3(c) shows speedups on SIFT1B when running RAC using 200 machines but
+increasing the number CPUs per machine. Figure 3(d) shows a log-log plot of merge time as a
+function of the number of mergers occurring in a round (for SIFT1M and SIFT200K). Merge time
+scales roughly linearly in number of merges.
+
+
+uses network and compute equally (see Table 2), would dominate the runtime. This is indeed what
+we find experimentally, i.e., that run-time for merge rounds is nearly linear in the number of merges
+(Figure 3 (d)) in that round.
+
+
+7    Conclusion
+We have introduced Reciprocal Agglomerative Clustering (RAC), a distributed variation of Hierar-
+chical Agglomerative Clustering (HAC) that can be efficiently parallelized. RAC achieves efficiency
+by identifying reciprocal nearest neighbors and merging them in parallel. We have proved the
+correctness of RAC and that it achieves speedup guarantees in stable cluster trees as well as in
+certain probabilistic settings. Lastly, we have experimentally shown that RAC can scale to billions of
+nodes and trillions of edges.
+
+
+
+
+                                                 13
+References
+Massih Amini, Nicolas Usunier, and Cyril Goutte. Learning from multiple partially observed views-an
+ application to multilingual text categorization. In Advances in neural information processing
+ systems, pages 28–36, 2009.
+Pranjal Awasthi, Maria Balcan, and Konstantin Voevodski. Local algorithms for interactive clustering.
+  In International Conference on Machine Learning, pages 550–558, 2014.
+MohammadHossein Bateni, Soheil Behnezhad, Mahsa Derakhshan, MohammadTaghi Hajiaghayi,
+ Raimondas Kiveris, Silvio Lattanzi, and Vahab Mirrokni. Affinity clustering: Hierarchical clustering
+ at scale. In Advances in Neural Information Processing Systems, pages 6867–6877, 2017.
+Rebecca J Cathey, Eric C Jensen, Steven M Beitzel, Ophir Frieder, and David Grossman. Exploiting
+  parallelism to support scalable hierarchical clustering. Journal of the Association for Information
+  Science and Technology, 58(8):1207–1221, 2007.
+C De Rham. La classification hiérarchique ascendante selon la méthode des voisins réciproques. Les
+  Cahiers de l’Analyse des Données, 135:144, 1980.
+Daniel Defays. An efficient algorithm for a complete link method. The Computer Journal, 20(4):
+ 364–366, 1977.
+J.L. Doob. Stochastic Processes. Wiley Publications in Statistics. John Wiley & Sons, 1953.
+Hervé Jégou, Romain Tavenard, Matthijs Douze, and Laurent Amsaleg. Searching in one billion
+ vectors: re-rank with source coding. In Acoustics, Speech and Signal Processing (ICASSP), 2011
+ IEEE International Conference on, pages 861–864. IEEE, 2011.
+Yongkweon Jeon and Sungroh Yoon. Multi-threaded hierarchical clustering by parallel nearest-
+  neighbor chaining. IEEE Transactions on Parallel and Distributed Systems, 26(9):2534–2548,
+  2015.
+Godfrey N Lance and William Thomas Williams. A general theory of classificatory sorting strategies:
+ 1. hierarchical systems. The computer journal, 9(4):373–380, 1967.
+Ken Lang. Newsweeder: Learning to filter netnews. In Proceedings of the Twelfth International
+ Conference on Machine Learning, pages 331–339, 1995.
+Benjamin Moseley and Joshua Wang. Approximation bounds for hierarchical clustering: Average
+  linkage, bisecting k-means, and local search. In Advances in Neural Information Processing Systems,
+  pages 3097–3106, 2017.
+Fionn Murtagh. A survey of recent advances in hierarchical clustering algorithms. The Computer
+  Journal, 26(4):354–359, 1983.
+Fionn Murtagh. Complexities of hierarchic clustering algorithms: state of the art. Computational
+  Statistics Quarterly, 1(2):101–113, 1984.
+R Rammal, JC Angles d’Auriac, and Beno^ıt Douçot. On the degree of ultrametricity. Journal de
+  Physique Lettres, 46(20):945–952, 1985.
+Edie M Rasmussen and Peter Willett. Efficiency of hierarchic agglomerative clustering using the icl
+  distributed array processor. Journal of Documentation, 45(1):1–24, 1989.
+Robin Sibson. Slink: an optimally efficient algorithm for the single-link cluster method. The computer
+  journal, 16(1):30–34, 1973.
+Robert R Sokal. A statistical method for evaluating systematic relationship. University of Kansas
+ science bulletin, 28:1409–1438, 1958.
+WT Williams and JM t Lambert. Multivariate methods in plant ecology: V. similarity analyses and
+ information-analysis. The Journal of Ecology, pages 427–445, 1966.
+
+
+                                                 14
+                             Supplementary material
+
+We provide proofs of Theorems 4 and 8 in the following sections.
+
+
+Proof of Theorem 4
+Proof. We fix n ∈ N and use the notation  = 2−4n , Pk = (k + 1) + (k + 1)2 , and X = {Pi |i =
+0, . . . , 2n − 1}.
+We first prove that RAC with average linkage takes Ω(2n ) rounds with input X. We do this by
+showing that in each round, at most one merge involves the singleton clusters {Pi } (in fact, we
+show that they are merged in order of increasing i). We first note that clusters always consist of a
+contiguous set of points. In a given round, let r be the smallest index such that for i ≥ r, each Pi is
+in a singleton cluster. Let Cr = {{Pi }|i = r, . . . , 2n − 1} denote these singleton clusters. For i > r,
+cluster {Pi }’s nearest neighbor is {Pi−1 }. As for {Pr }, because Pr−1 is not in a singleton cluster,
+{Pr }’s nearest neighbor must be {Pr+1 }. As a result, the only reciprocal nearest neighbor involving
+clusters in Cr is the pair ({Pr }, {Pr+1 }). This completes the proof of the lower bound.
+In the rest of the proof, we show that HAC (and hence RAC) with average linkage produces a
+dendrogram of height n with X as input. Consider the natural complete binary tree T on X.
+Specifically, define nodes at the bottom level Ni0 = Pi . For higher levels, define Nil recursively, i.e.
+                l−1        l−1
+Nil will have N2i    and N2i+1 as its children.
+We note following simple properties of T below, where we use the notation X > Y for sets X and Y
+to mean that every point of X is greater than every point in Y .
+
+   1. T has height n.
+   2. There are 2n−l nodes at level l.
+
+   3. The subtree rooted at Nil contains the following 2l points as leaves:
+      {Pk |i · 2l ≤ k ≤ (i + 1) · 2l − 1}.
+       l
+   4. Ni+1 > Nil .
+
+We will show that HAC with average linkage produces T . Since T has height n, this will complete
+the proof.
+Let d(Pk , Pi ) = |Pk −Pi | be the Euclidean distance between two
+                                                                P points. For sets X and Y , define their
+                                                           1
+distance according to average linkage, i.e., d(X, Y ) = |X||Y |   Pk ∈X,Pi ∈Y d(Pk , Pi ). The following is
+easy to see:
+Lemma 10. Let X, Y, Z be such that X > Y > Z. Then d(X, Y ) < d(X, Z).
+
+We will need the following series of somewhat tedious but straightforward lemmas regarding the
+distances between pairs of nodes in T .
+Lemma 11. d(Nil , Ni+1
+                   l
+                       ) is monotonically increasing in i.
+
+Proof. We evaluate the more general distance between nodes Nil and Ni+u
+                                                                    l
+                                                                        in the same level l for
+any u > 0:
+
+
+
+
+                                                    15
+                                      l    l
+                                     2 −1 2 −1
+                                  1 X X
+               d(Nil , Ni+u
+                        l
+                                                                         
+                            )=                 d P2l ·i+r , P2l ·(i+u)+s
+                                 22l r=0 s=0
+                       l
+                    2 −1
+                 1 X l
+               = 2l      (2 (i + u) · s + (2l (i + u) · s)2  − 2l i + ·r − (2l i + ·r)2 )
+                2 r,s=0
+                       l
+                    2 −1
+                 1 X
+               = 2l      ((2l · u + s − r) + (2l · u + s − r) · (2l+1 i + 2l · u + s − r) · )        (1)
+                2 r,s=0
+
+
+Setting u = 1 and noting that s and r are upper bounded by 2l − 1, we have that (2l + s − r) is
+positive, and hence the last expression is monotonically increasing in i.
+
+The following lemma relates the nodes in two different levels:
+Lemma 12. Consider the nodes N2i+2  l
+                                         and Njl+1 for j ≤ i. Then d(N2i+2
+                                                                      l       l
+                                                                           , N2i+3        l
+                                                                                   ) < d(N2i+2 , Njl+1 ).
+Informally, the distance from a node to its neighbor at the same level on its right is less than the
+distance to its neighbor on a higher level on its left.
+
+                l+1
+Proof. Since Nj−1   < Njl+1 , it suffices to prove the lemma for j = i. Now, by construction, Nil+1 is
+                              l         l
+the result of the merging N2i    and N2i+1   and thus
+
+                                                1
+                           d(Nil+1 , N2i+2
+                                      l
+                                           )=         l
+                                                  (d(N2i    l
+                                                         , N2i+2        l
+                                                                 ) + d(N2i+1    l
+                                                                             , N2i+2 )).
+                                                2
+Thus, we need to prove that 12 (d(N2i
+                                    l    l
+                                      , N2i+2        l
+                                              ) + d(N2i+1    l
+                                                          , N2i+2         l
+                                                                  )) > d(N2i+2    l
+                                                                               , N2i+3 ), which (replacing
+2i with i) is equivalent to proving
+                             1
+                               (d(Nil , Ni+2
+                                         l          l
+                                             ) + d(Ni+1    l
+                                                        , Ni+2         l
+                                                               )) > d(Ni+2    l
+                                                                           , Ni+3 )
+                             2
+for any i and l. Rewriting each distance term using Equation (1), it suffices to prove for any r and s
+that
+
+
+                     (2l · 2 + s − r) + (2l · 2 + s − r) · (2l+1 i + 2l · 2 + s − r) · 
+                     + (2l + s − r) + (2l + s − r) · (2l+1 (i + 1) + 2l + s − r) ·  >
+                     2((2l + s − r) + (2l u + s − r) · (2l+1 (i + 2) + 2l + s − r) · ).
+
+Focusing first on the terms not involving , we have
+
+            (2l · 2 + s − r) + (2l + s − r) − 2(2l + s − r) = (2l · 2 + s − r) − (2l + s − r)
+                                                                    = 2l ≥ 1.
+
+Since terms including  are much smaller than 1, the lemma follows.
+
+Lastly, this lemma states that adjacent distances at a higher level are larger than adjacent distances
+at a lower level.
+                                                       0        0
+Lemma 13. If l > l0 , then d(Nil , Ni+1
+                                    l
+                                        ) > d(Njl , Nj+1
+                                                     l
+                                                         )
+
+
+
+
+                                                           16
+Proof. Using Equation (1) with u = 1, we have
+                                                   l
+                                                   2 −1
+                                                1 X l
+                             d(Nil , Ni+1
+                                      l
+                                          )=            (2 + s − r) + O()
+                                               22l r,s=0
+                                                         l
+                                                    2 −1
+                                               l 1 X
+                                           = 2 + 2l      (s − r) + O().
+                                                2 r,s=0
+
+Note that the second term vanishes by symmetry. Thus, d(Nil , Ni+1   l
+                                                                       ) = 2l + O() and for l0 ≥ l + 1,
+     0     0                         0
+d(Njl , Nj+1
+         l
+             ) − d(Nil , Ni+1
+                          l
+                              ) = 2l − 2l + O() ≥ 2l + O() > 0 for sufficiently small epsilon. To see
+                           −4n
+that our choice of  = 2        suffices, we can bound the term of Equation (1) involving  as
+
+                            (2l + s − r) · (2l+1 i + 2l + s − r) ·  < 24n−1 ,
+
+where we have used i ≤ 2n−l , s − r ≤ 2l − 1, and l ≤ n − 1. Since the average of these terms is also
+bounded by the same quantity, the proof is complete.
+
+We now show that HAC with average linkage produces T . Consider the state S of the clustering
+algorithm after a merge. It consists of a partition of the nodes into a number of sets. We define S to
+be good if there exists l and k with 0 ≤ k < 2n−l such that
+
+                                 S = {Nil : i < k} ∪ {Njl−1 : j ≥ 2k}.                              (2)
+
+Informally, this is a clustering of nodes covered by one or two levels where the nodes in each level
+consists of a single contiguous span. Note that the case k = 0 corresponds to a single layer.
+We claim that after each step of merging in HAC, the state is good. Note that this shows that T is
+indeed the tree produced by HAC with average linkage.
+We proceed by induction. The base case is clear, since the state consisting of each Pi as a single
+                                                                                              l−1
+node is good. Now, consider an arbitrary state for a given l and k. We claim that nodes N2k        and
+  l−1
+N2k+1 will be merged next. The fact that no other pair at level l − 1 will be merged is implied by
+Lemma 11. Lemma 13 implies that no pair at level l is merged. Finally, a pair in different levels (one
+                                                                                              l−1
+in l and another in l − 1) merging is ruled out by Lemma 12. It is clear that the merge of N2k     and
+  l−1
+N2k+1 results in a good state, completing the proof.
+
+
+
+
+Proof of Theorem 8
+We prove that for the bounded probabilistic graph model, the expected runtime of RAC is O(n2 ).
+
+Proof. Since the total number of rounds is O(log n) in expectation, and each round takes O(n2 )
+time, we easily obtain the weaker expected runtime guarantee of O(n2 log n). The following analysis
+strengthens this result by shaving off the log n factor. Let nj be the number of clusters at the end
+of round j, with n0 = n, and let Xj = nj /nj−1 be the fraction by which the number of clusters
+                                  Qj
+reduces in round j. Thus, nj = n i=1 Xi . Since the number of merges, Mj , in each round satisfies
+E[Mj ] ≥ αnj−1 , and nj = nj−1 − Mj , it follows that E[Xj ] ≤ 1 − α. A key component of the proof
+is bounding the variance of the Xj ’s:
+Lemma 14. Var(Xj |X1 , . . . , Xj−1 ) ≤ B/nj−1 , where B is a constant.
+
+Assuming Lemma 14, the rest of the proof is as follows. From the equation E[X 2 ] = E[X]2 + Var(X),
+we have E[Xj2 |X1 , . . . , Xj−1 ] ≤ (1 − α)2 + B/nj−1 . Define k such that nk+1 < B/α ≤ nk . We
+
+
+                                                    17
+decompose RAC’s runtime into two parts - the time taken for the first k rounds, and the remaining
+time. Using the fact that the number of points after the first k rounds is the constant B/α, we can
+write the expected runtime of RAC as
+                                         Xk                   k
+                                                              X       j
+                                                                      Y
+                                       E[   O(nj )2 + O(1)] =   E[O(n   Xi )2 ]
+                                         j=0                             j=0            i=1
+                                                                                 k
+                                                                                 X           j
+                                                                                             Y
+                                                                   = O(n2 )             E[         Xi2 ],
+                                                                                 j=0         i=1
+                                                                                                               Pk      Qj      2
+where we use the convention that the empty product is 1. It suffices to show that                                j=0 E[   i=1 Xi ] =
+O(1). Using Lemma 14, we have
+                E[Xj2 |X1 , . . . , Xj−1 ] ≤ (1 − α)2 + B/nj−1
+                                                ≤ (1 − α)2 + α                                 (using B/α ≤ nj−1 )
+                                                              2
+                                                = 1 − α + α < 1.
+Defining ρ = 1 − α + α2 , we have
+                j
+                Y              j−1
+                               Y
+           E[       Xi2 ] = E[         Xi2 E[Xj2 |X1 , . . . , Xj−1 ]]                 (by law of total expectation)
+            i=1                  i=1
+                                  j−1
+                                  Y
+                        ≤ ρE[           Xi2 ]
+                                  i=1
+                        ≤ ρj                                                                                (by induction)
+      Pk        Qj       2
+                                  P∞        j
+and    j=0 E[       i=1 Xi ] ≤         j=0 ρ = 1/(1 − ρ) = O(1).
+
+
+Proof of Lemma 14. The main idea behind the bound is that the number of merges, M , is the sum
+of Bernoulli random variables with most pairs having non-positive covariance. Let G = (V, E) be a
+graph with m edges e1 , . . . , em and vertex degrees dv ≤ d for v ∈ V . Note that the bounded degree
+property implies the edge bound m ≤ d|V |/2. We assign weights to the edges so that they are sorted
+at random. For i = 1, . . . , m let Yi be the indicator random variable for the event that edge
+                                                                                             Pmei is
+merged (i.e., thePweight of ei is smaller  than the weights of its adjacent edges). Then M =    i=1 Yi
+                  m                 P
+and Var(M ) = i=1 Var(Yi ) + 2 i<j Cov(Yi , Yj ). To bound the pairwise covariances, Cov(Yi , Yj ),
+we consider three cases:
+
+  1. ei and ej are adjacent (i.e., have a vertex in common): In this case, E[Yi Yj ] = 0 since both ei
+     and ej cannot be merged. Thus, Cov(Yi , Yj ) = −E[Yi ]E[Yj ] < 0.
+  2. ei and ej are not adjacent to a common edge: In this case, Yi and Yj are independent, since
+     the random variables that define them are disjoint. Hence, Cov(Yi , Yj ) = 0.
+  3. ei and ej are adjacent to a common edge: In this case, we can bound the number of such
+     pairs by d2 m since each common edge ei = (a, b) gives rise to at most da db ≤ d2 such pairs for
+     i = 1, . . . , m.
+                                                 P
+Breaking up the covariance term 2                   i<j Cov(Yi , Yj ) according to the above cases, we have
+
+                                                       m
+                                                       X                       X
+                                        Var(M ) =            Var(Yi ) + 2            Cov(Yi , Yj )
+                                                       i=1                     i<j
+
+                                                     ≤ m + d2 m = (d2 + 1)m
+                                                     ≤ (d2 + 1)dnj−1 /2,
+
+
+                                                                  18
+where we have used the fact that for the indicator random variables Yi , Var(Yi ) ≤ 1 and Cov(Yi , Yj ) ≤
+1, and that m ≤ dnj−1 /2.
+We apply this in the case M = Mj . Since Xj = 1 − Mj /nj−1 , we have
+
+                             Var(Xj |X1 , . . . , Xj−1 ) = Var(Mj /nj−1 )
+                                                      ≤ (1/n2j−1 ) Var(Mj )
+                                                      ≤ (d2 + 1)d/(2nj−1 ).
+
+
+
+
+                                                    19

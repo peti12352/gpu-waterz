@@ -2,9 +2,11 @@
 #define REGION_GRAPH_H__
 
 #include <algorithm>
+#include <cstdint>
 #include <vector>
 #include <limits>
 #include <cassert>
+#include <unordered_map>
 
 template <typename ID>
 struct RegionGraphEdge {
@@ -166,6 +168,17 @@ public:
 		_numNodes(numNodes),
 		_incEdges(numNodes) {}
 
+	void reserveEdges(std::size_t n) {
+		_edges.reserve(n);
+		_lookup.reserve(n);
+	}
+
+	static uint64_t edgeKey(NodeIdType u, NodeIdType v) {
+		NodeIdType lo = u < v ? u : v;
+		NodeIdType hi = u < v ? v : u;
+		return (static_cast<uint64_t>(lo) << 32) | static_cast<uint64_t>(hi);
+	}
+
 	ID numNodes() const { return _numNodes; }
 
 	std::size_t numEdges() const { return _edges.size(); }
@@ -185,10 +198,12 @@ public:
 	EdgeIdType addEdge(NodeIdType u, NodeIdType v) {
 
 		EdgeIdType id = _edges.size();
-		_edges.push_back(EdgeType(std::min(u, v), std::max(u, v)));
+		NodeIdType lo = std::min(u, v), hi = std::max(u, v);
+		_edges.push_back(EdgeType(lo, hi));
 
 		_incEdges[u].push_back(id);
 		_incEdges[v].push_back(id);
+		_lookup[edgeKey(lo, hi)] = id;
 
 		for (RegionGraphEdgeMapBase<ID>* map : _edgeMaps)
 			map->onNewEdge(id);
@@ -198,6 +213,7 @@ public:
 
 	void removeEdge(EdgeIdType e) {
 
+		_lookup.erase(edgeKey(_edges[e].u, _edges[e].v));
 		removeIncEdge(_edges[e].u, e);
 		removeIncEdge(_edges[e].v, e);
 	}
@@ -211,6 +227,7 @@ public:
 		//      order independent, four subcases
 		//   3. u and v changed
 
+		_lookup.erase(edgeKey(_edges[e].u, _edges[e].v));
 		NodeIdType pu = _edges[e].u;
 		NodeIdType pv = _edges[e].v;
 
@@ -249,6 +266,7 @@ public:
 		// ensure new ids are sorted
 		if (_edges[e].u > _edges[e].v)
 			std::swap(_edges[e].u, _edges[e].v);
+		_lookup[edgeKey(_edges[e].u, _edges[e].v)] = e;
 
 		assert(std::min(u, v) == _edges[e].u);
 		assert(std::max(u, v) == _edges[e].v);
@@ -273,7 +291,10 @@ public:
 	 */
 	inline EdgeIdType findEdge(NodeIdType u, NodeIdType v) {
 
-		return findEdge(u, v, (_incEdges[u].size() < _incEdges[v].size() ? _incEdges[u] : _incEdges[v]));
+		auto it = _lookup.find(edgeKey(u, v));
+		if (it != _lookup.end())
+			return it->second;
+		return NoEdge;
 	}
 
 	/**
@@ -351,6 +372,7 @@ private:
 
 	std::vector<RegionGraphNodeMapBase<ID>*> _nodeMaps;
 	std::vector<RegionGraphEdgeMapBase<ID>*> _edgeMaps;
+	std::unordered_map<uint64_t, EdgeIdType> _lookup;
 };
 
 #endif // REGION_GRAPH_H__

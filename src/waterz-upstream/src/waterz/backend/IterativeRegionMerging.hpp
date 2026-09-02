@@ -28,7 +28,11 @@ public:
 		_edgeScores(initialRegionGraph),
 		_deleted(initialRegionGraph),
 		_stale(initialRegionGraph),
-		_mergedUntil(std::numeric_limits<ScoreType>::lowest()) {}
+		_rootPaths(initialRegionGraph.numNodes()),
+		_mergedUntil(std::numeric_limits<ScoreType>::lowest()) {
+		for (NodeIdType i = 0; i < (NodeIdType)_rootPaths.size(); ++i)
+			_rootPaths[i] = i;
+	}
 
 	/**
 	 * Merge a RAG with the given edge scoring function until the given threshold.
@@ -277,8 +281,7 @@ private:
 
 	inline bool isRoot(NodeIdType id) {
 
-		// if there is no root path, it is a root
-		return (_rootPaths.count(id) == 0);
+		return id < _rootPaths.size() && _rootPaths[id] == id;
 	}
 
 	/**
@@ -286,21 +289,16 @@ private:
 	 */
 	NodeIdType getRoot(NodeIdType id) {
 
-		// early way out
 		if (isRoot(id))
 			return id;
 
-		// walk up to root
-
-		NodeIdType root = _rootPaths.at(id);
+		NodeIdType root = _rootPaths[id];
 		while (!isRoot(root))
-			root = _rootPaths.at(root);
+			root = _rootPaths[root];
 
-		// not compressed, yet
-		if (_rootPaths.at(id) != root)
+		if (_rootPaths[id] != root)
 			while (id != root) {
-
-				NodeIdType next = _rootPaths.at(id);
+				NodeIdType next = _rootPaths[id];
 				_rootPaths[id] = root;
 				id = next;
 			}
@@ -319,12 +317,8 @@ private:
 	// sorted list of edges indices, cheapest edge first
 	QueueType<EdgeIdType, ScoreType> _edgeQueue;
 
-	// paths from nodes to the roots of the merge-tree they are part of
-	//
-	// root nodes are not in the map
-	//
-	// paths will be compressed when read
-	std::map<NodeIdType, NodeIdType> _rootPaths;
+	// parent pointer; root if _rootPaths[id] == id. Compressed on read.
+	std::vector<NodeIdType> _rootPaths;
 
 	// current state of merging
 	ScoreType _mergedUntil;

@@ -46,6 +46,11 @@ public:
 		return _meanAffinities[e];
 	}
 
+	inline void setEdge(EdgeIdType e, ValueType mean, size_t n) {
+		_meanAffinities[e] = mean;
+		_numValues[e] = n;
+	}
+
 private:
 
 	typename RegionGraphType::template EdgeMap<size_t> _numValues;
