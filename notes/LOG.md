@@ -865,13 +865,20 @@ Measured at val (125x1200x1200 = 180 Mvox):
     rag peak         2.871 GiB   17.12 B/vox   nedge=7505458
     concurrent peak 13.33 GiB    (max stage + resident aff/seg/out)
 
-Projected (linear in voxels, which is right for the benchmark volumes because
-make_big.py tiles val, so plateau/corner density is preserved):
+Projected. WS is scaled linearly, which is right for the benchmark volumes
+because make_big.py tiles val, so plateau/corner density is preserved. RAG is
+computed from its own `next_pow2(2*max_edges) * 16 B` formula instead, since
+its table is a step function of the max_edges argument and not of voxel count;
+scaling the val measurement had given 34.45 G at 2.16 Gvox where the formula
+gives 7.66 G.
 
     volume                  WS        RAG      io       peak    fits 24 GiB
-    val 180 Mvox         11.49 G    2.87 G   1.84 G   13.33 G   yes
-    1.44 Gvox            91.91 G   22.97 G  14.75 G  106.66 G   NO
-    2.16 Gvox           137.87 G   34.45 G  22.13 G  159.99 G   NO   <-- 6.7x
+    val 180 Mvox         11.49 G    1.70 G   1.84 G   13.33 G   yes
+    1.44 Gvox            91.91 G    6.77 G  14.75 G  106.66 G   NO
+    2.16 Gvox           137.87 G    7.66 G  22.13 G  159.99 G   NO   <-- 6.7x
+
+At 2.16 Gvox: ~26.1M fragments, ~90.1M edges, largest z-slab that fits ~20 GiB
+of usable VRAM is ~270 Mvox, so **>= 8 slabs**.
 
 Where the watershed's 68.53 B/vox goes, from the E9b diagnostics
 (`ncorner=61035574 nplat=55032772 qtot=565241094`):
@@ -897,7 +904,20 @@ Consequences, and they reorder the whole plan:
    arrays that can share storage with an in-place scan; `vcount` is only needed
    per plateau, not per voxel.
 
-Not yet fixed. Recorded so the 2 Gvox/s claim is not attempted on a card that
+Two things fixed already from this analysis:
+
+- `segment.py` hardcoded `max_e = 20_000_000`. At the measured 0.0417
+  edges/vox that caps the pipeline at ~480 Mvox, so 2.16 Gvox would have
+  failed with `rag_gpu_d overflow` on edge capacity before it ever reached a
+  memory limit. Now `_max_edges(nvox)` with a 20M floor.
+- That cap is 0.055 edges/vox, 32% over measured, deliberately chosen to stay
+  under a power-of-two boundary: rag.cu sizes its table `next_pow2(2*max_edges)`,
+  so 0.08 tips into 2^29 slots and an 8.00 GiB table where 0.055 stays at 2^28
+  and 4.00 GiB. Overflow returns -1 rather than truncating, so too small fails
+  loudly.
+
+The 160 GiB verdict itself is not yet fixed; chunking is the only thing that
+changes it. Recorded so the 2 Gvox/s claim is not attempted on a card that
 provably cannot hold the volume.
 
 ## Measurement bug found in `scripts/e6s_parhac.py`

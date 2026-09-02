@@ -50,6 +50,10 @@ VOLUMES = {
 }
 CARD_GIB = {"RTX 3090 Ti": 24.0, "RTX 5090": 32.0}
 MAX_E = 20_000_000
+# Must track src/segment.py's _max_edges and csrc/rag.cu's Slot.
+EDGES_PER_VOX = 0.055
+MIN_MAX_E = 20_000_000
+SLOT_BYTES = 16
 
 
 def build():
@@ -144,35 +148,58 @@ def main():
 
     rows = []
     for label, tv in VOLUMES.items():
+        # Watershed scales linearly: its buffers are either 4 B/vox arrays or
+        # corner/plateau/queue arrays whose counts track voxel count at fixed
+        # plateau density, which tiling preserves.
         ws_p = ws_per_vox * tv
-        rag_p = rag_per_vox * tv
-        # Output labels the caller must hold, one uint32 per voxel, plus the
-        # uint8 affinity that must be resident for both flow and RAG.
-        aff_b = 3.0 * tv
-        seg_b = 4.0 * tv
-        out_b = 4.0 * tv
-        io_b = aff_b + seg_b + out_b
+
+        # RAG must NOT be scaled linearly. Its dominant buffer is a hash table
+        # sized next_pow2(2 * max_edges) * sizeof(Slot), a step function of the
+        # max_edges argument rather than of voxel count, and segment.py derives
+        # max_edges from the volume. Scaling the val measurement instead
+        # produced 34.45 GiB for 2.16 Gvox where the formula gives ~11.7 GiB.
+        max_e = max(MIN_MAX_E, int(EDGES_PER_VOX * tv))
+        cap = 1
+        while cap < 2 * max_e:
+            cap *= 2
+        rag_table = cap * SLOT_BYTES
+        rag_flags = cap * 4
+        rag_edges = max_e * (4 + 4 + 8 + 8)
+        rag_p = rag_table + rag_flags + rag_edges
+
+        # Resident across stages: uint8 affinity, uint32 fragment ids, uint32
+        # output labels.
+        io_b = (3.0 + 4.0 + 4.0) * tv
         concurrent = max(ws_p, rag_p) + io_b
         rows.append({
             "volume": label,
             "voxels": tv,
             "ws_gib": ws_p / GIB,
             "rag_gib": rag_p / GIB,
+            "rag_table_gib": rag_table / GIB,
+            "rag_max_edges": max_e,
             "io_gib": io_b / GIB,
-            "stage_sum_gib": (ws_p + rag_p + io_b) / GIB,
             "concurrent_peak_gib": concurrent / GIB,
             "est_fragments": frag_per_vox * tv,
             "est_edges": edge_per_vox * tv,
             "fits_3090ti_24gib": bool(concurrent / GIB <= 24.0),
+            "slab_mvox_for_20gib": 20.0 * GIB / (ws_per_vox + 11.0) / 1e6,
         })
 
-    print("\nC1 footprint (concurrent peak = max(stage) + resident aff/seg/out)")
-    hdr = f"{'volume':32s} {'WS':>9s} {'RAG':>9s} {'io':>8s} {'peak':>9s} {'24GiB':>7s}"
-    print(hdr)
+    print("\nC1 footprint. WS scaled from measurement; RAG from its own "
+          "next_pow2(2*max_edges) formula.")
+    print(f"{'volume':32s} {'WS':>9s} {'RAG':>9s} {'io':>8s} {'peak':>9s} {'24GiB':>7s}")
     for r in rows:
         print(f"{r['volume']:32s} {r['ws_gib']:8.2f}G {r['rag_gib']:8.2f}G "
               f"{r['io_gib']:7.2f}G {r['concurrent_peak_gib']:8.2f}G "
               f"{'yes' if r['fits_3090ti_24gib'] else 'NO':>7s}")
+    tgt = rows[-1]
+    print(f"\nC1 at 2.16 Gvox: ~{tgt['est_fragments'] / 1e6:.1f}M fragments, "
+          f"~{tgt['est_edges'] / 1e6:.1f}M edges, RAG max_edges="
+          f"{tgt['rag_max_edges']} -> table alone {tgt['rag_table_gib']:.2f} GiB")
+    print(f"C1 largest z-slab that fits ~20 GiB of usable VRAM: "
+          f"~{tgt['slab_mvox_for_20gib']:.0f} Mvox, so 2.16 Gvox needs "
+          f">= {int(tgt['voxels'] / (tgt['slab_mvox_for_20gib'] * 1e6)) + 1} slabs")
 
     out = {
         "val": {

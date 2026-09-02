@@ -52,9 +52,28 @@ def _watershed(aff_u8, low, high):
     return out
 
 
+# Measured on val: 7505458 edges from 180 Mvox = 0.0417 edges/voxel
+# (scripts/c1_memory_budget.py). A fixed 20M cap makes rag_gpu return -1 for
+# anything past ~480 Mvox, so the 2.16 Gvox target would fail on edge capacity
+# before it failed on memory.
+#
+# 0.055 keeps 32% headroom over the measured density. Headroom is expensive
+# here: rag.cu sizes its table as next_pow2(2 * max_edges) * 16 B, so crossing
+# a power-of-two boundary doubles it. At 2.16 Gvox, 0.055 lands under 2^28
+# slots for a 4.29 GiB table, where 0.08 tips into 2^29 and 8.00 GiB. Overflow
+# is reported as -1 rather than silently truncated, so a too-small cap fails
+# loudly.
+EDGES_PER_VOX = 0.055
+MIN_MAX_EDGES = 20_000_000
+
+
+def _max_edges(nvox):
+    return max(MIN_MAX_EDGES, int(EDGES_PER_VOX * nvox))
+
+
 def _rag(aff_u8, seg):
     z, y, x = aff_u8.shape[1:]
-    max_e = 20_000_000
+    max_e = _max_edges(z * y * x)
     u = np.empty(max_e, np.uint32)
     v = np.empty(max_e, np.uint32)
     sm = np.empty(max_e, np.float64)
@@ -297,7 +316,7 @@ def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
         ctypes.c_float(aff_low), ctypes.c_float(aff_high),
         seg_t.data_ptr(), ctypes.byref(nfrag), ctypes.byref(ms),
     )
-    max_e = 20_000_000
+    max_e = _max_edges(n)
     u_t = torch.empty(max_e, dtype=torch.int32, device="cuda")
     v_t = torch.empty(max_e, dtype=torch.int32, device="cuda")
     sm_t = torch.empty(max_e, dtype=torch.float64, device="cuda")
