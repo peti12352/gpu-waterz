@@ -1042,3 +1042,28 @@ Next candidate on this loop, not yet done: only ~36% of voxels (64M of 180M,
 from `qused_sum`) are in a plateau at all, so the rounds could sweep a
 compacted active list instead of the full volume, roughly 21 GB of traffic
 saved against ~1.5 GB to build the list.
+
+## Rejected: active-list union-find rounds
+
+Tried and reverted. The premise was that the union-find rounds sweep the whole
+volume while only the ~64M voxels implied by `qused_sum` can be hooked, so a
+compacted list would cut each round to 36% of the work.
+
+The measurement refuted it: **128,450,317 of 180,000,000 voxels have a
+reciprocated neighbour**, 71% of the volume, not 36%. The list saves 1.4x on
+the sweep, not 2.8x, against three added passes to build it.
+
+The gap between 128M and 64M is the useful part of this result. `qused_sum`
+counts voxels in plateaus that reach the plateau list, and a component only
+gets there if it contains at least one corner. So roughly 64M voxels sit in
+corner-free flat regions, local minima with no outlet, which become basins
+directly and are never divided. They are reciprocally linked, hence hookable,
+hence on the active list, but contribute nothing to the queue total.
+
+Reverted because the trade is bad on the axis that actually binds. Net traffic
+saving works out around 25%, which is unverifiable on a GPU at 96% contention
+(`uf_ms` 498 -> 510, i.e. noise), while the list costs 2.86 B/vox, about
+6.2 GiB at 2.16 Gvox, during the phase that competes for the memory the whole
+Track C effort is trying to free. Output stayed bit-identical throughout, so
+this was a performance judgement and not a correctness one. Worth revisiting
+only once timings are trustworthy.
