@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""A1: grade E6t/StarMerge on its own at the four TASK thresholds.
+
+Track A tunes the StarMerge path, so its correctness has to be established
+first -- tuning a wrong implementation is worthless. This gate answers only
+"is E6t VOI-legal", never "is E6t fast", and it writes no `*_pass.txt` stamp,
+so `segment()` path selection is untouched.
+
+E6t is selected by `WATERZ_PAPER_E6T` in csrc/parhac_d.cu; without it
+`parhac_paper_d_timed` runs E6s. The reported inner/merge counts identify
+which path actually ran (E6s reference: inner=1930 merges=1853410;
+E6t reference: inner=1562 merges=1853416).
+
+Any timing printed here is PROVISIONAL: the dev GPU is shared, so device_ms
+is inflated by whatever else is resident. Correctness is contention-immune.
+"""
+from __future__ import annotations
+
+import ctypes
+import io
+import json
+import os
+import subprocess
+import sys
+import time
+from contextlib import redirect_stdout
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "src"))
+from _agg_common import CACHE, grade_parents, load_rag  # noqa: E402
+from e6r_parhac import DSO, compile_d  # noqa: E402
+from task_gate import AFF_THRESHOLDS, print_contract  # noqa: E402
+
+# Reference stats from notes/LOG.md, used to prove which path executed.
+E6S_REF = {"inner": 1930, "merges": 1853410}
+E6T_REF = {"inner": 1562, "merges": 1853416}
+
+
+def gpu_state():
+    """Record contention so any timing in the JSON is self-documenting."""
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used,memory.free,utilization.gpu",
+             "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=20,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+    return out
+
+
+def bind(lib):
+    lib.parhac_paper_d_timed.restype = ctypes.c_int
+    lib.parhac_paper_d_timed.argtypes = [
+        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_int64),
+        ctypes.c_int64, ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+        ctypes.c_double, ctypes.POINTER(ctypes.c_uint32), ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_double),
+    ]
+
+
+def run(lib, u, v, sm, ct, thrs, max_id):
+    parents = np.empty((len(thrs), max_id + 1), dtype=np.uint32)
+    stats = np.zeros((len(thrs), 3), dtype=np.int64)
+    device_ms = ctypes.c_double(0.0)
+    t0 = time.perf_counter()
+    rc = lib.parhac_paper_d_timed(
+        u.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        v.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        sm.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ct.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        ctypes.c_int64(len(u)),
+        thrs.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        ctypes.c_int(len(thrs)),
+        ctypes.c_double(0.08),
+        parents.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        ctypes.c_uint32(max_id),
+        stats.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
+        ctypes.byref(device_ms),
+    )
+    wall_ms = (time.perf_counter() - t0) * 1000.0
+    return rc, parents, stats, float(device_ms.value), wall_ms
+
+
+def main():
+    print_contract()
+    compile_d()
+    os.environ["WATERZ_PAPER_E6T"] = "1"
+    before = gpu_state()
+    print(f"A1 E6t/StarMerge four-T VOI. GPU at start: {before}", flush=True)
+    print("A1 timing is PROVISIONAL (shared GPU); this gate gates VOI only.",
+          flush=True)
+
+    u, v, sm, ct, fr, max_id = load_rag()
+    lib = ctypes.CDLL(str(DSO))
+    bind(lib)
+
+    thrs = np.asarray(AFF_THRESHOLDS, dtype=np.float64)
+    rc, parents, stats, device_ms, wall_ms = run(
+        lib, u, v, sm, ct, thrs, max_id)
+    inner = [int(x) for x in stats[:, 2]]
+    merges = [int(x) for x in stats[:, 1]]
+    outer = [int(x) for x in stats[:, 0]]
+    print(
+        f"A1 rc={rc} device_ms={device_ms:.2f} wall_ms={wall_ms:.2f}\n"
+        f"   outer={outer}\n   inner={inner}\n   merges={merges}",
+        flush=True,
+    )
+
+    # Prove which path ran, so a silently-defaulted E6s cannot pass as E6t.
+    t03_idx = AFF_THRESHOLDS.index(0.3) if 0.3 in AFF_THRESHOLDS else 1
+    took_e6t = merges[t03_idx] != E6S_REF["merges"]
+    print(
+        f"A1 path check @T=0.3: inner={inner[t03_idx]} merges={merges[t03_idx]}"
+        f" | E6s ref {E6S_REF} | E6t ref {E6T_REF}"
+        f" -> {'E6t (StarMerge)' if took_e6t else 'E6s -- WATERZ_PAPER_E6T HAD NO EFFECT'}",
+        flush=True,
+    )
+
+    result = {
+        "rc": int(rc),
+        "device_ms_provisional": device_ms,
+        "wall_ms_provisional": wall_ms,
+        "outer": outer,
+        "inner": inner,
+        "merges": merges,
+        "thresholds": list(AFF_THRESHOLDS),
+        "took_e6t": bool(took_e6t),
+        "gpu_at_start": before,
+        "gpu_at_end": gpu_state(),
+        "timing_is_graded": False,
+    }
+
+    ok = False
+    if rc != 1:
+        print(f"A1 FAIL rc={rc}", flush=True)
+    elif not took_e6t:
+        print("A1 FAIL — E6s ran, so this says nothing about E6t.", flush=True)
+    else:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            ok = grade_parents(parents, fr, "A1-E6t", "a1_e6t_voi")
+        sys.stdout.write(buf.getvalue())
+
+    result["voi_pass"] = bool(ok)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    (CACHE / "a1_e6t_voi.json").write_text(json.dumps(result, indent=2) + "\n")
+    print(
+        f"A1 {'PASS' if ok else 'FAIL'} (VOI only; no stamp written; "
+        "no speed claim)",
+        flush=True,
+    )
+    return ok
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if main() else 1)

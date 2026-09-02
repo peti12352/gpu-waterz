@@ -759,4 +759,37 @@ Do not write 2 Gvox/s. 5090 val AGG 1.29 s is not a 3090 Ti number and is ~26× 
 
 Residual vs TASK speed: compact 954 ms on val already exceeds the entire 50 ms AGG budget. No unused legal agglomerator left. Renting a 3090 Ti now would measure ~1.78× this, not pass E9.
 
+## A1 — E6t/StarMerge is VOI-legal (correctness established before tuning)
+
+`scripts/a1_e6t_voi.py`, `data/cache/a1_e6t_voi.json`. Writes no stamp, so
+`segment()` path selection is untouched. Forces `WATERZ_PAPER_E6T=1` and proves
+the path from stats (T=0.3 inner=373 vs E6s ref 1930), so a silently-defaulted
+E6s cannot pass as E6t.
+
+    T=0.2 split 0.3821 <= 0.3979  merge 0.3469 <= 0.3525  PASS
+    T=0.3 split 0.4512 <= 0.4738  merge 0.2515 <= 0.2611  PASS
+    T=0.4 split 0.5175 <= 0.5378  merge 0.2271 <= 0.2381  PASS
+    T=0.5 split 0.6168 <= 0.6309  merge 0.2187 <= 0.2293  PASS
+    ACCURACY GATE: PASS
+
+nseg 294177/321999/345088/379173 (E6s locked: 294162/321994/345065/379093;
+small drift, within TASK's statistical-equivalence allowance).
+Per-T marginal outer=[384,256,192,576] inner=[550,373,279,896].
+
+Consequence: StarMerge is **correct**; only its implementation is slow. The
+earlier E6uvw 9768 ms was an implementation defect, not an algorithmic dead end,
+so the "no unused legal agglomerator left" conclusion above is superseded.
+
+device_ms=40029 for all four T, measured with a co-tenant job holding ~11 GB at
+95% GPU utilization. **PROVISIONAL — not a speed result.** Timing under
+contention is not graded; graded timing waits for an uncontended GPU.
+
+## Measurement bug found in `scripts/e6s_parhac.py`
+
+The script branches on `WATERZ_PAPER_E6S`, but `csrc/parhac_d.cu` reads
+`WATERZ_PAPER_E6T` (default E6s) after the 19:30 source flip. So the line
+labelled `E6uvw T=0.3 ... 1294.21 ms` was in fact **E6s**, and the
+"retry as E6s" fallback is dead code. The 1294 ms number itself is correct for
+E6s; only the label was wrong.
+
 
