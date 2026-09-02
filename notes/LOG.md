@@ -1136,3 +1136,56 @@ deterministic in practice, so this is not an active bug, but the priority is an
 integer hash and should be sorted as one. Doing that changes the tie order and
 therefore the output, so it needs a VOI re-grade rather than a bit-equality
 check.
+
+## Fused the proposal sort: sort phase 8.8x, E6s end-to-end 1.94x
+
+Acting on the phase split from the previous entry. The proposal sort was two
+`thrust` calls per inner iteration over zip iterators, and at 3.85 ms per call
+to sort a few thousand elements the cost was thrust's per-call device
+synchronization, each of which also waits for the co-tenant process's kernels
+to drain.
+
+`k_accept_reds` needs only proposals grouped by red with each group in
+descending priority, and it never reads the priority itself. So `k_pack_prop_
+fused` now builds the sort key and payload directly,
+
+    key = red : (0x7fffffff - priority)      payload = blue : size
+
+and one ascending 64-bit `cub::DeviceRadixSort::SortPairs` produces exactly
+that order. CUB scratch and the four key/payload buffers are allocated once
+outside the loop, sized for `nnode`, which bounds every call since CUB's byte
+requirement is monotonic in item count. Two comparison sorts over zip
+iterators, ~3700 temporary allocations and ~3700 device syncs become one radix
+sort and a trivial unpack pass.
+
+    sort phase          14157 ms -> 1603 ms     8.8x
+    E6s device @T=0.3   25467 ms -> 13133 ms    1.94x
+    wall (contended)    52634 ms -> 40463 ms
+
+This also retires a latent hazard rather than only being faster. The old path
+stored the priority as `__uint_as_float` of a 31-bit hash and compared those
+bit patterns *as floats*; patterns in 0x7f800000-0x7fffffff are inf or NaN and
+NaN comparisons are false, so the order among roughly 0.39% of proposals was
+undefined. Ordering the hash as the integer it actually is has a defined total
+order. `dpris` is gone from this path entirely.
+
+Because that changes the tie order, bit-equality with the previous build was
+not the right gate; VOI was. It came back stronger than required:
+
+- unique-parent fingerprint `[294165, 322000, 345131, 379293]`, **identical**
+  to the stored baseline at all four thresholds
+- `outer=1088 inner=1840 merges=1853427`, identical to before
+- ACCURACY GATE: PASS at all four thresholds
+- A2 determinism `byte_identical=True ndiff=0`
+
+So the undefined float ordering never actually decided a merge differently on
+this input, which is luck rather than design, and is exactly why it was worth
+removing.
+
+A2 still reports FAIL overall, but only from E6t, which was root-caused as
+structurally nondeterministic earlier and is not the production path.
+
+`compact` is now the largest phase at 8766 ms, 21.7% of wall. The same
+question applies to it: whether `compact_radix` allocates or synchronizes per
+call. `parhac_dev`, the older profiling path behind a3 and p0y, still has the
+original thrust sorts; it is not the production path so it was left alone.

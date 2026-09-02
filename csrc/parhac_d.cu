@@ -357,6 +357,52 @@ __global__ void k_pack_prop(
     pris[slot] = __uint_as_float((unsigned)(p >> 32));
 }
 
+// Packing for a single fused radix sort, replacing two comparison sorts over
+// zip iterators. k_accept_reds needs only proposals grouped by red with each
+// group in descending priority, and it never reads the priority itself, so the
+// sort key and payload can be built directly:
+//
+//     key = red : (0x7fffffff - priority)      payload = blue : size
+//
+// One ascending 64-bit sort then produces exactly that order. The priority is
+// a 31-bit hash from prop_pri_bits, so the subtraction is injective and simply
+// reverses rank within a group.
+//
+// This also retires a latent hazard. The old path stored the priority as
+// __uint_as_float of that hash and compared the results as floats, but bit
+// patterns in 0x7f800000-0x7fffffff are inf or NaN, and NaN comparisons are
+// false, leaving their relative order undefined. Ordering the hash as the
+// integer it is has a defined total order. It is a different tie order, so
+// this changes which merges happen and has to be re-graded on VOI rather than
+// checked for bit-equality.
+__global__ void k_pack_prop_fused(
+    const unsigned long long* prop, const uint32_t* sz, int nnode,
+    unsigned long long* key, unsigned long long* pay, int* nprop)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i <= 0 || i >= nnode) return;
+    unsigned long long p = prop[i];
+    if (p == 0) return;
+    uint32_t r = (uint32_t)(p & 0xffffffffull);
+    if (r == 0) return;
+    unsigned pri = (unsigned)(p >> 32) & 0x7fffffffu;
+    int slot = atomicAdd(nprop, 1);
+    key[slot] = ((unsigned long long)r << 32)
+              | (unsigned long long)(0x7fffffffu - pri);
+    pay[slot] = ((unsigned long long)i << 32) | (unsigned long long)sz[i];
+}
+
+__global__ void k_unpack_prop(
+    const unsigned long long* key, const unsigned long long* pay,
+    uint32_t* reds, uint32_t* blues, uint32_t* addsz, int nprop)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nprop) return;
+    reds[i] = (uint32_t)(key[i] >> 32);
+    blues[i] = (uint32_t)(pay[i] >> 32);
+    addsz[i] = (uint32_t)(pay[i] & 0xffffffffull);
+}
+
 __global__ void k_accept_serial(
     const uint32_t* reds, const uint32_t* blues, const uint32_t* addsz,
     int nprop, uint32_t* parent, uint32_t* sz, const uint8_t* frozen,
@@ -1655,7 +1701,6 @@ static int parhac_e6s_dev(
     double *dblk, *tsm, *csm;
     int64_t *tct, *cct;
     uint8_t *dkeep, *dcolor, *dfrozen;
-    float *dpris;
     int *dnmerge, *dnprop, *ddbg, *dnact, *dndirty, *dnstar;
     uint8_t *ddirty_blue, *ddirty_star;
     int ntab = next_pow2((int)(n_edges * 2 + 1024));
@@ -1671,9 +1716,25 @@ static int parhac_e6s_dev(
     cudaMalloc(&dreds, (size_t)nnode * 4);
     cudaMalloc(&dblues, (size_t)nnode * 4);
     cudaMalloc(&dadd, (size_t)nnode * 4);
-    cudaMalloc(&dpris, (size_t)nnode * 4);
     cudaMalloc(&dnmerge, 4);
     cudaMalloc(&dnprop, 4);
+    // Proposal sort buffers and CUB scratch, sized once for the largest
+    // possible proposal count. Sizing per call was the whole problem: thrust
+    // allocated its own temporaries and synchronized on every one of the ~3700
+    // sort calls, and each of those syncs waited for the other processes on the
+    // card to drain too. CUB's byte requirement is monotonic in item count, so
+    // the query at nnode bounds every smaller call and the buffer is reused.
+    unsigned long long *pkey_in = nullptr, *pkey_out = nullptr;
+    unsigned long long *ppay_in = nullptr, *ppay_out = nullptr;
+    void* psort_tmp = nullptr;
+    size_t psort_bytes = 0;
+    cudaMalloc(&pkey_in, (size_t)nnode * 8);
+    cudaMalloc(&pkey_out, (size_t)nnode * 8);
+    cudaMalloc(&ppay_in, (size_t)nnode * 8);
+    cudaMalloc(&ppay_out, (size_t)nnode * 8);
+    cub::DeviceRadixSort::SortPairs(nullptr, psort_bytes, pkey_in, pkey_out,
+                                    ppay_in, ppay_out, nnode);
+    cudaMalloc(&psort_tmp, psort_bytes);
     ddbg = dnact = dndirty = dnstar = nullptr;
     ddirty_blue = ddirty_star = nullptr;
     if (zprof) {
@@ -1791,8 +1852,8 @@ static int parhac_e6s_dev(
                         zprof ? ddbg : nullptr);
                     ev_propose.stop();
                     ev_pack.start();
-                    k_pack_prop<<<bn, threads>>>(
-                        dprop, dsz, nnode, dreds, dblues, dadd, dpris, dnprop);
+                    k_pack_prop_fused<<<bn, threads>>>(
+                        dprop, dsz, nnode, pkey_in, ppay_in, dnprop);
                     ev_pack.stop();
                     int nprop = 0;
                     ev_d2h.start();
@@ -1821,25 +1882,15 @@ static int parhac_e6s_dev(
                         }
                         break;
                     }
-                    ev_sort.start();
-                    thrust::sort_by_key(
-                        thrust::device_ptr<float>(dpris),
-                        thrust::device_ptr<float>(dpris) + nprop,
-                        thrust::make_zip_iterator(thrust::make_tuple(
-                            thrust::device_ptr<uint32_t>(dreds),
-                            thrust::device_ptr<uint32_t>(dblues),
-                            thrust::device_ptr<uint32_t>(dadd))),
-                        thrust::greater<float>());
-                    thrust::stable_sort_by_key(
-                        thrust::device_ptr<uint32_t>(dreds),
-                        thrust::device_ptr<uint32_t>(dreds) + nprop,
-                        thrust::make_zip_iterator(thrust::make_tuple(
-                            thrust::device_ptr<uint32_t>(dblues),
-                            thrust::device_ptr<uint32_t>(dadd),
-                            thrust::device_ptr<float>(dpris))));
-                    ev_sort.stop();
                     int bp = (nprop + threads - 1) / threads;
                     if (bp < 1) bp = 1;
+                    ev_sort.start();
+                    cub::DeviceRadixSort::SortPairs(
+                        psort_tmp, psort_bytes, pkey_in, pkey_out,
+                        ppay_in, ppay_out, nprop);
+                    k_unpack_prop<<<bp, threads>>>(
+                        pkey_out, ppay_out, dreds, dblues, dadd, nprop);
+                    ev_sort.stop();
                     ev_accept.start();
                     k_accept_reds<<<bp, threads>>>(
                         dreds, dblues, dadd, nprop, dparent, dsz, dfrozen, eps, dnmerge);
@@ -1917,7 +1968,9 @@ static int parhac_e6s_dev(
             (long long)nlive);
     }
     cudaFree(dparent); cudaFree(dsz); cudaFree(dsz0); cudaFree(dcolor);
-    cudaFree(dfrozen); cudaFree(dprop); cudaFree(dpris);
+    cudaFree(dfrozen); cudaFree(dprop);
+    cudaFree(pkey_in); cudaFree(pkey_out);
+    cudaFree(ppay_in); cudaFree(ppay_out); cudaFree(psort_tmp);
     cudaFree(dreds); cudaFree(dblues); cudaFree(dadd);
     cudaFree(dnmerge); cudaFree(dnprop); cudaFree(dkeep);
     cudaFree(tu); cudaFree(tv); cudaFree(tsm); cudaFree(tct); cudaFree(dblk);
