@@ -1334,3 +1334,72 @@ with A2, not assumed.
 Also queued: `sort` is 1658 ms for a median nprop of 0 and ~2700 average,
 which cannot be work. A 64-bit CUB device sort is ~16 kernel launches; a
 single-block `cub::BlockRadixSort` fast path for small nprop would make it one.
+
+## Dedup by hash instead of by sort, and the bug that had shelved it
+
+`compact_radix` ran an 8-pass 64-bit radix sort over the whole live edge list
+every inner iteration for one reason only: to put duplicate keys next to each
+other so `ReduceByKey` could merge parallel edges. O(m log m) traffic and ~28
+kernel launches to do an O(m) job.
+
+`hash_combine_live` was already in this file, complete and unreferenced. It
+inserts each live edge into a hash table keyed on the canonical (u,v) with
+atomicAdd on the sums, then emits. Two things made it safe to try:
+
+- `k_rewrite` already zeroes `keep` for empty counts, self-loops and
+  background-incident edges and canonicalises u < v, so the guards inside
+  `k_hash_insert` are redundant and both paths combine the same edge multiset.
+- the sums commute: contact sums are integral affinity-byte counts held
+  exactly in a double after `k_scale_sm_bytes`, counts are integers.
+
+Two things did not obviously hold, and both got handled rather than assumed.
+
+**The emitted edge order.** `k_hash_emit` claims output slots with an atomic,
+so the edge list comes out in a different and run-to-run unstable order. The
+argument that this is harmless is that propose picks per node by atomicMax on
+a content-derived priority, so nothing depends on edge position. A2 tests it
+instead of taking it on trust, and it holds: byte-identical output, ndiff 0.
+
+**The 128-probe bound.** Falling out of that loop drops an edge silently,
+which is a wrong answer rather than a slow one, so `k_hash_insert` now sets an
+overflow flag the caller checks. It fired immediately on the first run, with
+merges down from 1853427 to 1522739. The flag is the only reason that was a
+finding rather than a plausible-looking speedup.
+
+The cause is a textbook one:
+
+    unsigned long long h = key * 0x9E3779B97F4A7C15ull;
+    int slot = (int)(h & mask);
+
+In a multiplicative hash the low k bits of the product depend only on the low
+k bits of the input, and here those are `v` alone. Every edge sharing an
+endpoint `v` hashed into one cluster, overran 128 probes and was dropped.
+Fibonacci hashing needs the *high* bits; the fix mixes to full avalanche with
+a murmur3 finalizer and then masks. This is very likely why the function was
+written, found to give wrong answers, and shelved instead of debugged.
+
+Also sized the table from the current `nlive` rather than the original edge
+count. Clearing is proportional to table size and `nlive` falls by an order of
+magnitude across the layers, so a table fixed at the initial size would clear
+~400 MB per iteration to hold a fraction of that. Load factor stays at or
+below 0.5, which is what makes the probe bound safe.
+
+    compact                 5383 ms -> 3469 ms    1.55x
+    E6s device @T=0.3       9854 ms -> 8255 ms
+    four-threshold grade   12350 ms -> 10390 ms
+
+Gated: A2 `byte_identical=True ndiff=0`, unique-parent fingerprint
+`[294165, 322000, 345131, 379293]` unchanged, ACCURACY GATE PASS, no overflow.
+Hash is now the default for the inner-loop compaction; `WATERZ_E6S_HASH=0`
+still reaches the radix path, which is the reference that set the fingerprint.
+The layer-level compaction still uses the radix path because it needs the
+threshold argument.
+
+Where E6s time sits now, contended, phases: compact 3469, compress 2240,
+sort 1483, everything else ~200. Note from the previous entry that roughly
+two thirds of the *total* is contention-induced drain latency, so these
+figures rank the work but do not predict a dedicated card.
+
+Still queued: `sort` is 1483 ms for a median nprop of 0, so it is CUB's ~16
+kernel launches per call, not work; a single-block `cub::BlockRadixSort` fast
+path for small nprop makes that one launch.

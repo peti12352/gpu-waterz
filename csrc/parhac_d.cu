@@ -1090,6 +1090,16 @@ static inline __device__ unsigned long long edge_key(uint32_t u, uint32_t v)
     return ((unsigned long long)u << 32) | (unsigned long long)v;
 }
 
+static inline __device__ unsigned long long hmix64(unsigned long long h)
+{
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 33;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= h >> 33;
+    return h;
+}
+
 __global__ void k_hash_clear(HSlot* tab, int n)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1102,7 +1112,7 @@ __global__ void k_hash_clear(HSlot* tab, int n)
 
 __global__ void k_hash_insert(
     const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
-    const uint8_t* keep, int64_t n, HSlot* tab, int ntab)
+    const uint8_t* keep, int64_t n, HSlot* tab, int ntab, int* ovf)
 {
     int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
     if (i >= n || !keep[i] || ct[i] < 1) return;
@@ -1114,7 +1124,14 @@ __global__ void k_hash_insert(
         b = t;
     }
     unsigned long long key = edge_key(a, b);
-    unsigned long long h = key * 0x9E3779B97F4A7C15ull;
+    // Avalanche before masking. The previous form was
+    //     h = key * 0x9E3779B97F4A7C15; slot = h & mask
+    // which is wrong in a way that quietly loses edges: in a multiplicative
+    // hash the low k bits of the product depend only on the low k bits of the
+    // input, and here those are v alone. Every edge sharing an endpoint v
+    // therefore landed in one cluster, blew past the 128-probe bound, and was
+    // dropped. Mixing to full avalanche first makes the masked low bits usable.
+    unsigned long long h = hmix64(key);
     int mask = ntab - 1;
     int slot = (int)(h & (unsigned long long)mask);
     for (int s = 0; s < 128; ++s) {
@@ -1126,6 +1143,10 @@ __global__ void k_hash_insert(
             return;
         }
     }
+    // Falling out of the probe loop would drop the edge silently, which is a
+    // wrong answer rather than a slow one. The table is kept at load factor
+    // <= 0.5 so this should never fire, and the caller checks the flag.
+    if (ovf) atomicExch(ovf, 1);
 }
 
 __global__ void k_hash_count(const HSlot* tab, int ntab, int* nout)
@@ -1205,21 +1226,51 @@ static int compact_and_combine(
     return 1;
 }
 
+static int next_pow2(int x);
+
+// Deduplicate the live edge list with a hash table instead of a sort.
+//
+// compact_radix does an 8-pass 64-bit radix sort over the whole live list on
+// every inner iteration for the sole purpose of putting duplicate keys next to
+// each other so ReduceByKey can merge parallel edges. That is O(m log m)
+// traffic and ~28 kernel launches to do an O(m) job. Inserting into a hash
+// table keyed on the canonical (u,v) does the same merge in one pass.
+//
+// k_rewrite has already dropped self-loops, background-incident edges and
+// empty counts via `keep`, and canonicalised u < v, so the guards inside
+// k_hash_insert are redundant and the two paths combine the same edge
+// multiset. The sums are order-independent: contact sums are integral
+// affinity-byte counts held exactly in a double after k_scale_sm_bytes, and
+// counts are integers, so the atomicAdds commute.
+//
+// What differs is the *order* of the emitted edge list, because k_hash_emit
+// claims output slots with an atomic. That is only safe because propose picks
+// per node by atomicMax on a content-derived priority, so it does not depend
+// on edge position. That argument is tested by A2, not trusted.
 static int hash_combine_live(
     uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
     uint32_t* dparent, int nnode, int64_t n, int64_t* n_out,
     int be, int threads,
     uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
-    HSlot* dtab, int ntab, int* dnout)
+    HSlot* dtab, int ntab, int* dnout, int* dovf, bool recompress = true)
 {
     int bn = (nnode + threads - 1) / threads;
-    k_compress<<<bn, threads>>>(dparent, nnode);
+    if (recompress) k_compress<<<bn, threads>>>(dparent, nnode);
     k_rewrite<<<be, threads>>>(du, dv, dsm, dct, dparent, n, dkeep, 0.0);
-    int tb = (ntab + threads - 1) / threads;
-    k_hash_clear<<<tb, threads>>>(dtab, ntab);
-    k_hash_insert<<<be, threads>>>(du, dv, dsm, dct, dkeep, n, dtab, ntab);
+    // Size the table from the *current* live count, not from the original edge
+    // count. Clearing is proportional to the table, and nlive falls by an
+    // order of magnitude across the layers, so a table fixed at the initial
+    // size would clear ~400 MB every iteration to hold a fraction of that.
+    // Load factor stays at or below 0.5, which is what makes the 128-probe
+    // bound in k_hash_insert safe.
+    int ntab_use = next_pow2((int)(n * 2 + 1024));
+    if (ntab_use > ntab) ntab_use = ntab;
+    int tb = (ntab_use + threads - 1) / threads;
+    k_hash_clear<<<tb, threads>>>(dtab, ntab_use);
+    k_hash_insert<<<be, threads>>>(
+        du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf);
     cudaMemset(dnout, 0, 4);
-    k_hash_emit<<<tb, threads>>>(dtab, ntab, tu, tv, tsm, tct, dnout);
+    k_hash_emit<<<tb, threads>>>(dtab, ntab_use, tu, tv, tsm, tct, dnout);
     int m = 0;
     cudaMemcpy(&m, dnout, 4, cudaMemcpyDeviceToHost);
     if (m <= 0) {
@@ -1856,6 +1907,15 @@ static int parhac_e6s_dev(
     std::vector<uint32_t> hparent((size_t)nnode);
     int64_t nlive = n_edges;
     const int nprobe = sync_probe();
+    // Hash combine is the default for the inner-loop compaction; the radix one
+    // is kept reachable with WATERZ_E6S_HASH=0 so the two can still be A/B'd,
+    // since the hash path changes the emitted edge order and the radix path is
+    // the reference that established the fingerprint.
+    const char* hs = std::getenv("WATERZ_E6S_HASH");
+    const bool use_hash = !(hs && std::atoi(hs) == 0);
+    int* dovf = nullptr;
+    cudaMalloc(&dovf, 4);
+    cudaMemset(dovf, 0, 4);
     if (max_outer < 1) max_outer = 64;
     {
         int be0 = (int)((n_edges + threads - 1) / threads);
@@ -2017,8 +2077,14 @@ static int parhac_e6s_dev(
                     layer_merges += hm;
                     if (hm == 0) break;
                     ev_compact.start();
-                    compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                        be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0, false);
+                    if (use_hash) {
+                        hash_combine_live(du, dv, dsm, dct, dkeep, dparent, nnode,
+                            nlive, &nlive, be, threads, tu, tv, tsm, tct,
+                            dtab, ntab, dnout, dovf, false);
+                    } else {
+                        compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
+                            be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0, false);
+                    }
                     ev_compact.stop();
                     be = (int)((nlive + threads - 1) / threads);
                     if (be < 1) be = 1;
@@ -2054,6 +2120,12 @@ static int parhac_e6s_dev(
             (long long)nlive);
     }
     cudaFree(dparent); cudaFree(dsz); cudaFree(dsz0); cudaFree(dcolor);
+    {
+        int hovf = 0;
+        cudaMemcpy(&hovf, dovf, 4, cudaMemcpyDeviceToHost);
+        if (hovf) std::fprintf(stderr, "E6s_HASH_OVERFLOW probe limit hit\n");
+    }
+    cudaFree(dovf);
     cudaFree(dfrozen); cudaFree(dprop);
     cudaFree(pkey_in); cudaFree(pkey_out);
     cudaFree(ppay_in); cudaFree(ppay_out); cudaFree(psort_tmp);
