@@ -55,6 +55,32 @@ __global__ void k_init_parent(uint32_t* parent, uint32_t* sz, int nnode)
     sz[i] = (i == 0) ? 0 : 1;
 }
 
+// Rescale contact sums into integral units of "affinity bytes" so that every
+// subsequent accumulation is exact and therefore order-independent.
+//
+// StarMerge folds a merged edge's weight in with atomicAdd on a double. Double
+// addition is not associative, so racing atomics give bit-different sums,
+// which flips `mean < TL` for edges sitting near the layer threshold and makes
+// the whole run nondeterministic. Affinities are uint8/255, so the true contact
+// sum is k/255 for an integer k; storing k instead makes each partial sum an
+// exactly representable integer, and atomicAdd on exact integers held in a
+// double is order-independent.
+//
+// Headroom: k is bounded by 255 * 3 * nvox = 1.65e12 for the 2.16 Gvox volume,
+// well inside the 2^53 = 9.0e15 exact-integer range of a double.
+//
+// Every threshold comparison in this file is relative (`sm/ct` against a TL
+// derived from a wmax that is itself computed from `sm/ct`), so the only value
+// needing a matching 255x is the externally supplied affinity threshold.
+__global__ void k_scale_sm_bytes(double* sm, int64_t n)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    sm[i] = (double)llround(sm[i] * 255.0);
+}
+
+static const double SM_BYTE_SCALE = 255.0;
+
 __global__ void k_wmax_live(
     const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
     uint32_t* parent, int64_t n, double* blk)
@@ -162,6 +188,38 @@ static inline __device__ uint8_t color_of(uint32_t i, uint64_t seed)
     return (x & 1ull) ? 1 : 2;
 }
 
+// Proposal priority, seeded from edge CONTENT rather than array position.
+//
+// The original form hashed the edge's index `i`. Under E6s that is harmless,
+// because compact_radix re-sorts the edge array by (u,v) every inner, so `i`
+// is a deterministic function of the graph. Under E6t it is fatal: StarMerge
+// picks the surviving slot for a merged edge by atomicCAS race, so `i` is
+// race-assigned and every downstream merge decision inherits that randomness.
+// Measured cost: two E6t runs on a byte-identical cached RAG disagreed on
+// 531431 of 2175401 parents, violating TASK's byte-identical requirement.
+//
+// Hashing the canonical root pair instead makes the priority position-free.
+// The returned value is used only as raw bits: it is packed into the high half
+// of `prop` and compared by unsigned atomicMax, carried through `pris` via
+// __uint_as_float/__float_as_uint, and used as radix sort key bits. It is
+// never an operand of float arithmetic, so a full 31-bit hash is usable and
+// gives ~2^31 tie space instead of the previous 24 bits.
+static inline __device__ unsigned prop_pri_bits(
+    uint64_t seed, uint32_t a, uint32_t b, uint32_t r)
+{
+    uint32_t lo = a < b ? a : b;
+    uint32_t hi = a < b ? b : a;
+    uint64_t h = ((uint64_t)lo << 32) | (uint64_t)hi;
+    h ^= seed;
+    h ^= h >> 33;
+    h *= 0xff51afd7ed558ccdull;
+    h ^= h >> 29;
+    h *= 0xc4ceb9fe1a85ec53ull;
+    h ^= (uint64_t)r * 0xD1B54A32D192ED03ull;
+    h ^= h >> 32;
+    return (unsigned)(h >> 32) & 0x7fffffffu;
+}
+
 __global__ void k_color(uint8_t* color, const uint32_t* parent, int nnode, uint64_t seed)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -205,10 +263,9 @@ __global__ void k_propose(
     if (frozen[r]) return;
     if (sz[r] < sz[bl]) return;
     if (dbg) atomicAdd(dbg + 4, 1);
-    uint64_t h = seed ^ ((uint64_t)i * 0xD1B54A32D192ED03ull) ^ ((uint64_t)r << 17);
-    float pri = (float)((h >> 11) & 0xffffff) / (float)0xffffff;
     unsigned long long pack =
-        ((unsigned long long)__float_as_uint(pri) << 32) | (unsigned long long)r;
+        ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
+        | (unsigned long long)r;
     atomicMax(&prop[bl], pack);
 }
 
@@ -232,10 +289,9 @@ __global__ void k_propose_list(
     uint32_t bl = (ca == 1) ? b : a;
     if (frozen[r]) return;
     if (sz[r] < sz[bl]) return;
-    uint64_t h = seed ^ ((uint64_t)i * 0xD1B54A32D192ED03ull) ^ ((uint64_t)r << 17);
-    float pri = (float)((h >> 11) & 0xffffff) / (float)0xffffff;
     unsigned long long pack =
-        ((unsigned long long)__float_as_uint(pri) << 32) | (unsigned long long)r;
+        ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
+        | (unsigned long long)r;
     unsigned long long old = atomicMax(&prop[bl], pack);
     if (old == 0 && pack != 0) {
         int slot = atomicAdd(nlist, 1);
@@ -522,10 +578,9 @@ __global__ void k_propose_eid(
     uint32_t bl = (ca == 1) ? b : a;
     if (frozen[r]) return;
     if (sz[r] < sz[bl]) return;
-    uint64_t h = seed ^ ((uint64_t)(unsigned)i * 0xD1B54A32D192ED03ull) ^ ((uint64_t)r << 17);
-    float pri = (float)((h >> 11) & 0xffffff) / (float)0xffffff;
     unsigned long long pack =
-        ((unsigned long long)__float_as_uint(pri) << 32) | (unsigned long long)r;
+        ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
+        | (unsigned long long)r;
     atomicMax(&prop[bl], pack);
 }
 
@@ -555,10 +610,9 @@ __global__ void k_propose_eid_list(
     uint32_t bl = (ca == 1) ? b : a;
     if (frozen[r]) return;
     if (sz[r] < sz[bl]) return;
-    uint64_t h = seed ^ ((uint64_t)(unsigned)i * 0xD1B54A32D192ED03ull) ^ ((uint64_t)r << 17);
-    float pri = (float)((h >> 11) & 0xffffff) / (float)0xffffff;
     unsigned long long pack =
-        ((unsigned long long)__float_as_uint(pri) << 32) | (unsigned long long)r;
+        ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
+        | (unsigned long long)r;
     unsigned long long old = atomicMax(&prop[bl], pack);
     if (old == 0 && pack != 0) {
         int slot = atomicAdd(nlist, 1);
@@ -1551,6 +1605,11 @@ static int parhac_e6s_dev(
     std::vector<uint32_t> hparent((size_t)nnode);
     int64_t nlive = n_edges;
     if (max_outer < 1) max_outer = 64;
+    {
+        int be0 = (int)((n_edges + threads - 1) / threads);
+        if (be0 < 1) be0 = 1;
+        k_scale_sm_bytes<<<be0, threads>>>(dsm, n_edges);
+    }
     EvAccum ev_compact(aa ? &aa->compact_ms : nullptr);
     EvAccum ev_propose(aa ? &aa->propose_ms : nullptr);
     EvAccum ev_pack(aa ? &aa->pack_ms : nullptr);
@@ -1565,7 +1624,7 @@ static int parhac_e6s_dev(
 
     for (int oi = 0; oi < n_thr; ++oi) {
         int ti = order[oi];
-        const double T = aff_thr[ti];
+        const double T = aff_thr[ti] * SM_BYTE_SCALE;
         int64_t nmerge = 0, ninner = 0, nouter = 0;
         for (int layer = 0; layer < 10000; ++layer) {
             int be = (int)((nlive + threads - 1) / threads);
@@ -2044,10 +2103,15 @@ static int parhac_e6t_dev(
     std::vector<double> hblk((size_t)nblk);
     std::vector<uint32_t> hparent((size_t)nnode);
     int64_t nlive = n_edges;
+    {
+        int be0 = (int)((n_edges + threads - 1) / threads);
+        if (be0 < 1) be0 = 1;
+        k_scale_sm_bytes<<<be0, threads>>>(dsm, n_edges);
+    }
 
     for (int oi = 0; oi < n_thr; ++oi) {
         int ti = order[oi];
-        const double T = aff_thr[ti];
+        const double T = aff_thr[ti] * SM_BYTE_SCALE;
         int64_t nmerge = 0, ninner = 0, nouter = 0;
         for (int layer = 0; layer < 10000; ++layer) {
             int be = (int)((nlive + threads - 1) / threads);

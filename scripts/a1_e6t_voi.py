@@ -22,6 +22,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -87,12 +88,51 @@ def run(lib, u, v, sm, ct, thrs, max_id):
     return rc, parents, stats, float(device_ms.value), wall_ms
 
 
+def capture_stderr(fn):
+    """Run fn with the C library's fd-2 output captured.
+
+    parhac_d.cu announces its path as "E6s T=..." / "E6t T=..." on stderr.
+    Reading that marker is the only airtight way to know which path executed:
+    inferring it from inner/merge counts is unreliable, because in a
+    four-threshold run the per-threshold counts are marginal and much smaller
+    than the single-threshold reference figures.
+    """
+    sys.stderr.flush()
+    saved = os.dup(2)
+    try:
+        with tempfile.TemporaryFile(mode="w+b") as tf:
+            os.dup2(tf.fileno(), 2)
+            try:
+                out = fn()
+            finally:
+                sys.stderr.flush()
+                os.dup2(saved, 2)
+            tf.seek(0)
+            txt = tf.read().decode("utf-8", "replace")
+    finally:
+        os.close(saved)
+    return out, txt
+
+
 def main():
+    # --nograde skips the ~2 min grading pass and reports stats only. Track A
+    # uses it as a fast regression oracle: any change to the proposal sort
+    # order shows up as a drift in per-threshold merge counts long before it
+    # shows up in VOI, so exact-match on merges is the tighter gate.
+    nograde = "--nograde" in sys.argv
+    # --e6s grades the deterministic compact-every-inner path instead. Needed
+    # whenever a shared kernel (propose priority, contact-sum scaling) changes,
+    # since those affect both paths.
+    want_e6s = "--e6s" in sys.argv
+    tag = "E6s" if want_e6s else "E6t"
     print_contract()
     compile_d()
-    os.environ["WATERZ_PAPER_E6T"] = "1"
+    if want_e6s:
+        os.environ.pop("WATERZ_PAPER_E6T", None)
+    else:
+        os.environ["WATERZ_PAPER_E6T"] = "1"
     before = gpu_state()
-    print(f"A1 E6t/StarMerge four-T VOI. GPU at start: {before}", flush=True)
+    print(f"A1 {tag} four-T VOI. GPU at start: {before}", flush=True)
     print("A1 timing is PROVISIONAL (shared GPU); this gate gates VOI only.",
           flush=True)
 
@@ -101,8 +141,9 @@ def main():
     bind(lib)
 
     thrs = np.asarray(AFF_THRESHOLDS, dtype=np.float64)
-    rc, parents, stats, device_ms, wall_ms = run(
-        lib, u, v, sm, ct, thrs, max_id)
+    (rc, parents, stats, device_ms, wall_ms), errtxt = capture_stderr(
+        lambda: run(lib, u, v, sm, ct, thrs, max_id))
+    sys.stderr.write(errtxt)
     inner = [int(x) for x in stats[:, 2]]
     merges = [int(x) for x in stats[:, 1]]
     outer = [int(x) for x in stats[:, 0]]
@@ -113,12 +154,14 @@ def main():
     )
 
     # Prove which path ran, so a silently-defaulted E6s cannot pass as E6t.
-    t03_idx = AFF_THRESHOLDS.index(0.3) if 0.3 in AFF_THRESHOLDS else 1
-    took_e6t = merges[t03_idx] != E6S_REF["merges"]
+    saw_e6s = "E6s T=" in errtxt
+    saw_e6t = "E6t T=" in errtxt
+    ran = "E6s" if (saw_e6s and not saw_e6t) else (
+        "E6t" if (saw_e6t and not saw_e6s) else "ambiguous")
+    path_ok = ran == tag
     print(
-        f"A1 path check @T=0.3: inner={inner[t03_idx]} merges={merges[t03_idx]}"
-        f" | E6s ref {E6S_REF} | E6t ref {E6T_REF}"
-        f" -> {'E6t (StarMerge)' if took_e6t else 'E6s -- WATERZ_PAPER_E6T HAD NO EFFECT'}",
+        f"A1 path check (from library stderr marker): ran={ran} wanted={tag}"
+        f" -> {'OK' if path_ok else 'WRONG PATH'}",
         flush=True,
     )
 
@@ -130,26 +173,41 @@ def main():
         "inner": inner,
         "merges": merges,
         "thresholds": list(AFF_THRESHOLDS),
-        "took_e6t": bool(took_e6t),
+        "path_ran": ran,
+        "wanted_path": tag,
+        "path_ok": bool(path_ok),
         "gpu_at_start": before,
         "gpu_at_end": gpu_state(),
         "timing_is_graded": False,
     }
 
+    # nseg is a cheap, exact partition fingerprint; combined with merge counts
+    # it detects any reordering of the proposal sort without paying for VOI.
+    nseg = [int(np.unique(parents[i]).size) for i in range(len(thrs))]
+    result["nseg_unique_parents"] = nseg
+    print(f"A1 unique-parent fingerprint={nseg}", flush=True)
+
     ok = False
     if rc != 1:
         print(f"A1 FAIL rc={rc}", flush=True)
-    elif not took_e6t:
-        print("A1 FAIL — E6s ran, so this says nothing about E6t.", flush=True)
+    elif not path_ok:
+        print(f"A1 FAIL — wanted {tag} but the other path ran.", flush=True)
+    elif nograde:
+        print("A1 --nograde: stats only, VOI not evaluated", flush=True)
     else:
         buf = io.StringIO()
         with redirect_stdout(buf):
-            ok = grade_parents(parents, fr, "A1-E6t", "a1_e6t_voi")
+            ok = grade_parents(parents, fr, f"A1-{tag}", f"a1_{tag.lower()}_voi")
         sys.stdout.write(buf.getvalue())
 
     result["voi_pass"] = bool(ok)
+    result["graded"] = not nograde
     CACHE.mkdir(parents=True, exist_ok=True)
-    (CACHE / "a1_e6t_voi.json").write_text(json.dumps(result, indent=2) + "\n")
+    stem = f"a1_{tag.lower()}"
+    name = f"{stem}_stats.json" if nograde else f"{stem}_voi.json"
+    (CACHE / name).write_text(json.dumps(result, indent=2) + "\n")
+    if nograde:
+        return rc == 1 and took_e6t
     print(
         f"A1 {'PASS' if ok else 'FAIL'} (VOI only; no stamp written; "
         "no speed claim)",
