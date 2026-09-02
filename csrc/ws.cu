@@ -50,6 +50,17 @@ extern "C" void ws_mem_reset(void) { g_mem_peak = g_mem_cur; }
 extern "C" size_t ws_mem_peak(void) { return g_mem_peak; }
 extern "C" size_t ws_mem_cur(void) { return g_mem_cur; }
 
+// A total peak says how much is needed but not which point in the pipeline
+// demands it, which is what decides where to shorten a buffer's lifetime.
+// WATERZ_WS_MEMLOG=1 prints live and peak bytes at each labelled checkpoint.
+static void ws_mem_mark(const char* label) {
+    static int on = -1;
+    if (on < 0) on = getenv("WATERZ_WS_MEMLOG") != nullptr;
+    if (!on) return;
+    fprintf(stderr, "WSMEM %-22s cur=%8.3f GiB peak=%8.3f GiB\n", label,
+            g_mem_cur / 1073741824.0, g_mem_peak / 1073741824.0);
+}
+
 #define cudaMalloc(p, n) ws_tracked_malloc((void**)(p), (n))
 #define cudaFree(p) ws_tracked_free((void*)(p))
 
@@ -1080,6 +1091,38 @@ __global__ void k_keys_from_parent(
     keys[t] = parent[idx[t]];
 }
 
+// The divide stage stores corner and queue entries as uint32 voxel indices
+// rather than int64, which halves its two largest per-corner arrays and the
+// radix sort's payload traffic. e9b_divide_d rejects volumes that would not
+// fit that range.
+__global__ void k_keys_from_parent_u32(
+    const uint32_t* idx, const uint32_t* parent, uint32_t* keys, int n)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    keys[t] = parent[idx[t]];
+}
+
+__global__ void k_or40_u32(uint8_t* bits, const uint32_t* idx, int n) {
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    bits[idx[t]] |= 0x40;
+}
+
+// An in-place exclusive scan overwrites the corner flags, but they stay
+// recoverable: voxel i was a corner iff ps[i+1] > ps[i], with the final voxel
+// covered by last_f read before the scan. So one uint32-per-voxel buffer does
+// the work of the separate flag and psum arrays.
+__global__ void k_scatter_idx_u32(
+    const uint32_t* ps, uint32_t last_f, uint32_t* idx, int64_t size)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= size) return;
+    uint32_t here = ps[i];
+    bool corner = (i + 1 < size) ? (ps[i + 1] > here) : (last_f != 0);
+    if (corner) idx[here] = (uint32_t)i;
+}
+
 __global__ void k_run_start(const uint32_t* keys, uint32_t* start, int n) {
     int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= n) return;
@@ -1088,7 +1131,7 @@ __global__ void k_run_start(const uint32_t* keys, uint32_t* start, int n) {
 
 __global__ void k_scatter_plat(
     const uint32_t* start, const uint32_t* psum, const uint32_t* keys,
-    const int64_t* /*corners*/, int* plat_begin, uint32_t* plat_root, int n)
+    int* plat_begin, uint32_t* plat_root, int n)
 {
     int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= n) return;
@@ -1100,22 +1143,34 @@ __global__ void k_scatter_plat(
 
 __global__ void k_plat_meta(
     const int* plat_begin, const uint32_t* plat_root, const uint32_t* vcount,
-    int* plat_nseed, int64_t* qsz, int P, int nC)
+    int* plat_nseed, uint32_t* qsz, int P, int nC)
 {
     int p = blockIdx.x * blockDim.x + threadIdx.x;
     if (p >= P) return;
     int b = plat_begin[p];
     int e = (p + 1 < P) ? plat_begin[p + 1] : nC;
     plat_nseed[p] = e - b;
-    uint32_t vc = vcount[plat_root[p]];
-    int64_t qs = (int64_t)vc + (int64_t)plat_nseed[p] + 8;
-    if (qs < 1) qs = 1;
-    qsz[p] = qs;
+    // vcount[root] is exactly the number of voxels in the plateau, and the BFS
+    // pushes each of them at most once: the seeds are pre-marked 0x40 by k_or40
+    // so they cannot be re-pushed, and any j it does push is reciprocally
+    // linked to a popped voxel, hence in the same union-find component and
+    // itself counted in vcount. So tail <= vcount[root] and no slack is needed.
+    // Measured over all 55,032,772 val plateaus: max(tail - vcount) == 0, and
+    // the previous vcount + nseed + 8 sizing was 8.84x oversized.
+    // vcount[root] >= nseed >= 1 because every seed is flagged, hence counted,
+    // so the total is bounded by the voxel count and both qsz and its scan fit
+    // in uint32 under the volume guard in e9b_divide_d.
+    qsz[p] = vcount[plat_root[p]];
 }
 
+// The queue is sized per plateau from vcount, so an undersized qsz would run
+// one plateau's BFS into the next one's slot and corrupt the segmentation
+// silently. cap/overflow turn that into a loud failure, and qused reports the
+// true high-water mark so the sizing can be measured rather than guessed.
 __global__ void k_indep_bfs(
-    uint8_t* seg, const int64_t* corners, const int* plat_begin,
-    const int* plat_nseed, int64_t* q, const int64_t* qoff,
+    uint8_t* seg, const uint32_t* corners, const int* plat_begin,
+    const int* plat_nseed, int64_t* q, const uint32_t* qoff,
+    const uint32_t* qsz, int* overflow, int64_t* qused,
     int P, int64_t Y, int64_t X)
 {
     int p = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1124,8 +1179,16 @@ __global__ void k_indep_bfs(
     if (nseed <= 0) return;
     int c0 = plat_begin[p];
     int64_t* qp = q + qoff[p];
+    int64_t cap = qsz[p];
     int tail = 0;
-    for (int s = 0; s < nseed; ++s) qp[tail++] = corners[c0 + s];
+    for (int s = 0; s < nseed; ++s) {
+        if ((int64_t)tail >= cap) {
+            atomicExch(overflow, 1);
+            if (qused) qused[p] = tail;
+            return;
+        }
+        qp[tail++] = corners[c0 + s];
+    }
     int bi = 0;
     while (bi < tail) {
         int64_t i = qp[bi];
@@ -1136,6 +1199,11 @@ __global__ void k_indep_bfs(
             int64_t j = neigh_i(i, d, Y, X);
             if (seg[j] & (uint8_t)RBIT[d]) {
                 if (!(seg[j] & 0x40)) {
+                    if ((int64_t)tail >= cap) {
+                        atomicExch(overflow, 1);
+                        if (qused) qused[p] = tail;
+                        return;
+                    }
                     qp[tail++] = j;
                     seg[j] |= 0x40;
                 }
@@ -1146,21 +1214,40 @@ __global__ void k_indep_bfs(
         seg[i] = to_set;
         ++bi;
     }
+    if (qused) qused[p] = tail;
+}
+
+// Diagnostic for the queue-sizing measurement: how much of each plateau's
+// allocated slot the BFS actually used. qsz is vcount, so a positive value
+// anywhere would mean the tail <= vcount argument is wrong.
+__global__ void k_qdiag(
+    const uint32_t* qsz, const int64_t* qused, const int* plat_nseed,
+    int64_t* over_vc, int P)
+{
+    int p = blockIdx.x * blockDim.x + threadIdx.x;
+    if (p >= P) return;
+    over_vc[p] = qused[p] - (int64_t)qsz[p];
 }
 
 static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float* ms_out) {
     int64_t size = Z * Y * X;
+    // Corner and queue entries are uint32 voxel indices. 2.16 Gvox is well
+    // inside that range; anything larger must fail loudly, not wrap silently.
+    if (size > 4294967295LL) {
+        fprintf(stderr, "E9b FATAL volume %lld voxels exceeds uint32 indexing\n",
+                (long long)size);
+        return -4;
+    }
     int threads = 256;
     int blocks = (int)((size + threads - 1) / threads);
     uint32_t* parent = nullptr;
     uint32_t* flag = nullptr;
-    uint32_t* psum = nullptr;
     uint32_t* vcount = nullptr;
     cudaMalloc(&parent, (size_t)size * 4);
     cudaMalloc(&flag, (size_t)size * 4);
-    cudaMalloc(&psum, (size_t)size * 4);
     cudaMalloc(&vcount, (size_t)size * 4);
     cudaMemset(vcount, 0, (size_t)size * 4);
+    ws_mem_mark("divide/uf");
     k_parent_init<<<blocks, threads>>>(parent, size);
     for (int r = 0; r < 40; ++r) {
         k_hook_bidir<<<blocks, threads>>>(bits_d, parent, Z, Y, X);
@@ -1168,47 +1255,67 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     }
     k_corner_flag<<<blocks, threads>>>(bits_d, flag, Z, Y, X);
     k_count_v2<<<blocks, threads>>>(bits_d, flag, parent, vcount, Z, Y, X);
+    // Capture the last flag before the scan overwrites it, then scan flag into
+    // itself: k_scatter_idx_u32 recovers the corner predicate from the scan's
+    // own differences, so no second per-voxel array is needed.
+    uint32_t last_f = 0, last_p = 0;
+    cudaMemcpy(&last_f, flag + size - 1, 4, cudaMemcpyDeviceToHost);
     {
         void* tmp = nullptr;
         size_t tmp_bytes = 0;
-        cub::DeviceScan::ExclusiveSum(nullptr, tmp_bytes, flag, psum, (int)size);
+        cub::DeviceScan::ExclusiveSum(nullptr, tmp_bytes, flag, flag, (int)size);
         cudaMalloc(&tmp, tmp_bytes);
-        cub::DeviceScan::ExclusiveSum(tmp, tmp_bytes, flag, psum, (int)size);
+        cub::DeviceScan::ExclusiveSum(tmp, tmp_bytes, flag, flag, (int)size);
         cudaFree(tmp);
     }
-    uint32_t last_f = 0, last_p = 0;
-    cudaMemcpy(&last_f, flag + size - 1, 4, cudaMemcpyDeviceToHost);
+    uint32_t* psum = flag;
     cudaMemcpy(&last_p, psum + size - 1, 4, cudaMemcpyDeviceToHost);
     int nC = (int)(last_p + last_f);
     if (nC <= 0) {
         cudaFree(parent);
         cudaFree(flag);
-        cudaFree(psum);
         cudaFree(vcount);
         if (ms_out) *ms_out = 0;
         return 0;
     }
-    int64_t* corners_in = nullptr;
-    int64_t* corners_out = nullptr;
+    uint32_t* corners_in = nullptr;
+    uint32_t* corners_out = nullptr;
     uint32_t* keys_in = nullptr;
     uint32_t* keys_out = nullptr;
-    cudaMalloc(&corners_in, (size_t)nC * 8);
-    cudaMalloc(&corners_out, (size_t)nC * 8);
+    cudaMalloc(&corners_in, (size_t)nC * 4);
+    cudaMalloc(&corners_out, (size_t)nC * 4);
     cudaMalloc(&keys_in, (size_t)nC * 4);
     cudaMalloc(&keys_out, (size_t)nC * 4);
-    k_scatter_idx<<<blocks, threads>>>(flag, psum, corners_in, size);
+    ws_mem_mark("divide/corners");
+    k_scatter_idx_u32<<<blocks, threads>>>(psum, last_f, corners_in, size);
     int cb = (nC + 255) / 256;
-    k_keys_from_parent<<<cb, 256>>>(corners_in, parent, keys_in, nC);
+    k_keys_from_parent_u32<<<cb, 256>>>(corners_in, parent, keys_in, nC);
+    // parent and the flag/psum buffer are both dead here and are one uint32
+    // per voxel each. Holding them across the 61M-pair radix sort below cost
+    // 1.3 GiB of peak for nothing. cudaFree synchronizes, so the two launches
+    // above have completed before the storage is released.
+    cudaFree(parent);
+    parent = nullptr;
+    cudaFree(flag);
+    flag = nullptr;
+    psum = nullptr;
+    ws_mem_mark("divide/pre-sort");
     {
         void* tmp = nullptr;
         size_t tmp_bytes = 0;
         cub::DeviceRadixSort::SortPairs(
             nullptr, tmp_bytes, keys_in, keys_out, corners_in, corners_out, nC);
         cudaMalloc(&tmp, tmp_bytes);
+        ws_mem_mark("divide/sort-tmp");
         cub::DeviceRadixSort::SortPairs(
             tmp, tmp_bytes, keys_in, keys_out, corners_in, corners_out, nC);
         cudaFree(tmp);
     }
+    cudaFree(corners_in);
+    corners_in = nullptr;
+    cudaFree(keys_in);
+    keys_in = nullptr;
+    ws_mem_mark("divide/post-sort");
     uint32_t* start = nullptr;
     uint32_t* start_ps = nullptr;
     cudaMalloc(&start, (size_t)nC * 4);
@@ -1229,16 +1336,28 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     int* plat_begin = nullptr;
     int* plat_nseed = nullptr;
     uint32_t* plat_root = nullptr;
-    int64_t* qsz = nullptr;
-    int64_t* qoff = nullptr;
+    uint32_t* qsz = nullptr;
+    uint32_t* qoff = nullptr;
     cudaMalloc(&plat_begin, (size_t)P * 4);
     cudaMalloc(&plat_nseed, (size_t)P * 4);
     cudaMalloc(&plat_root, (size_t)P * 4);
-    cudaMalloc(&qsz, (size_t)P * 8);
-    cudaMalloc(&qoff, (size_t)P * 8);
-    k_scatter_plat<<<cb, 256>>>(start, start_ps, keys_out, corners_out, plat_begin, plat_root, nC);
+    k_scatter_plat<<<cb, 256>>>(start, start_ps, keys_out, plat_begin, plat_root, nC);
+    // keys_out and the run-start arrays are per-corner and dead once the
+    // plateau table exists, so they are released before the per-plateau queue
+    // arrays are allocated rather than overlapping with them.
+    cudaFree(keys_out);
+    keys_out = nullptr;
+    cudaFree(start);
+    start = nullptr;
+    cudaFree(start_ps);
+    start_ps = nullptr;
+    cudaMalloc(&qsz, (size_t)P * 4);
+    cudaMalloc(&qoff, (size_t)P * 4);
     int pb = (P + 255) / 256;
     k_plat_meta<<<pb, 256>>>(plat_begin, plat_root, vcount, plat_nseed, qsz, P, nC);
+    cudaFree(vcount);
+    vcount = nullptr;
+    ws_mem_mark("divide/pre-queue");
     {
         void* tmp = nullptr;
         size_t tmp_bytes = 0;
@@ -1247,31 +1366,73 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
         cub::DeviceScan::ExclusiveSum(tmp, tmp_bytes, qsz, qoff, P);
         cudaFree(tmp);
     }
-    int64_t last_qs = 0, last_qo = 0;
-    cudaMemcpy(&last_qs, qsz + P - 1, 8, cudaMemcpyDeviceToHost);
-    cudaMemcpy(&last_qo, qoff + P - 1, 8, cudaMemcpyDeviceToHost);
-    int64_t qtot = last_qo + last_qs;
+    uint32_t last_qs = 0, last_qo = 0;
+    cudaMemcpy(&last_qs, qsz + P - 1, 4, cudaMemcpyDeviceToHost);
+    cudaMemcpy(&last_qo, qoff + P - 1, 4, cudaMemcpyDeviceToHost);
+    int64_t qtot = (int64_t)last_qo + (int64_t)last_qs;
     if (qtot < 1) qtot = 1;
     int64_t* q = nullptr;
     cudaMalloc(&q, (size_t)qtot * 8);
-    k_or40<<<cb, 256>>>(bits_d, corners_out, nC);
+    int* overflow = nullptr;
+    cudaMalloc(&overflow, 4);
+    cudaMemset(overflow, 0, 4);
+    const bool qdiag = getenv("WATERZ_WS_QDIAG") != nullptr;
+    int64_t* qused = nullptr;
+    if (qdiag) {
+        cudaMalloc(&qused, (size_t)P * 8);
+        cudaMemset(qused, 0, (size_t)P * 8);
+    }
+    ws_mem_mark("divide/bfs");
+    k_or40_u32<<<cb, 256>>>(bits_d, corners_out, nC);
     cudaEvent_t ev0, ev1;
     cudaEventCreate(&ev0);
     cudaEventCreate(&ev1);
     cudaEventRecord(ev0);
-    k_indep_bfs<<<pb, 256>>>(bits_d, corners_out, plat_begin, plat_nseed, q, qoff, P, Y, X);
+    k_indep_bfs<<<pb, 256>>>(bits_d, corners_out, plat_begin, plat_nseed, q,
+                             qoff, qsz, overflow, qused, P, Y, X);
     cudaEventRecord(ev1);
     cudaEventSynchronize(ev1);
     float ms = 0;
     cudaEventElapsedTime(&ms, ev0, ev1);
     if (ms_out) *ms_out = ms;
+    int ovf = 0;
+    cudaMemcpy(&ovf, overflow, 4, cudaMemcpyDeviceToHost);
     fprintf(stderr, "E9b ncorner=%d nplat=%d qtot=%lld bfs_ms=%.2f\n",
             nC, P, (long long)qtot, ms);
+    if (qdiag) {
+        int64_t* over_vc = nullptr;
+        cudaMalloc(&over_vc, (size_t)P * 8);
+        k_qdiag<<<pb, 256>>>(qsz, qused, plat_nseed, over_vc, P);
+        int64_t* red = nullptr;
+        cudaMalloc(&red, 8);
+        void* tmp = nullptr;
+        size_t tb = 0;
+        int64_t h_sum = 0, h_max_over = 0, h_max_used = 0;
+        cub::DeviceReduce::Sum(nullptr, tb, qused, red, P);
+        cudaMalloc(&tmp, tb);
+        cub::DeviceReduce::Sum(tmp, tb, qused, red, P);
+        cudaMemcpy(&h_sum, red, 8, cudaMemcpyDeviceToHost);
+        cub::DeviceReduce::Max(tmp, tb, over_vc, red, P);
+        cudaMemcpy(&h_max_over, red, 8, cudaMemcpyDeviceToHost);
+        cub::DeviceReduce::Max(tmp, tb, qused, red, P);
+        cudaMemcpy(&h_max_used, red, 8, cudaMemcpyDeviceToHost);
+        fprintf(stderr,
+                "E9bQ qtot=%lld qused_sum=%lld qused_max=%lld "
+                "max(qused-vcount)=%lld waste=%.3f\n",
+                (long long)qtot, (long long)h_sum, (long long)h_max_used,
+                (long long)h_max_over, (double)qtot / (double)(h_sum ? h_sum : 1));
+        cudaFree(tmp);
+        cudaFree(red);
+        cudaFree(over_vc);
+        cudaFree(qused);
+    }
     cudaEventDestroy(ev0);
     cudaEventDestroy(ev1);
+    cudaFree(overflow);
+    // Each pointer below is either still live or was nulled when released
+    // early, and freeing null is a no-op, so one cleanup serves both exits.
     cudaFree(parent);
     cudaFree(flag);
-    cudaFree(psum);
     cudaFree(vcount);
     cudaFree(corners_in);
     cudaFree(corners_out);
@@ -1285,6 +1446,10 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     cudaFree(qsz);
     cudaFree(qoff);
     cudaFree(q);
+    if (ovf) {
+        fprintf(stderr, "E9b FATAL plateau BFS queue overflow\n");
+        return -3;
+    }
     return 0;
 }
 

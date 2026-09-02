@@ -929,3 +929,81 @@ labelled `E6uvw T=0.3 ... 1294.21 ms` was in fact **E6s**, and the
 E6s; only the label was wrong.
 
 
+
+## Watershed memory: 68.53 -> 25.43 B/vox, and the plateau BFS got 2.7x faster
+
+Track C wanted the watershed's 68.53 B/vox down. Before touching it, the
+existing gates were too weak to protect the change: they checked `nfrag` and
+`bg` counts, which a change can preserve while moving voxels between
+fragments. `scripts/c2_ws_invariants.py` closes that. It records, on val, a
+sha256 of the *sorted region-size histogram*, which is invariant to label
+renumbering but changes if a single voxel moves; plus two-run determinism and
+`array_equal` against the CPU oracle `wz_fragments.npy`.
+
+Worth noting on its own: the GPU watershed is **bit-identical to the CPU
+oracle**, not merely count-matched. Baseline fingerprint
+`fff9037cab341692be0c9bf3c577d4ff`, held by every step below.
+
+### The plateau BFS queue was 8.84x oversized
+
+`k_plat_meta` sized each plateau's queue slot `vcount[root] + nseed + 8`.
+Summed over 55,032,772 plateaus the `+8` alone is 440M of the 565M entries, so
+78% of the largest buffer in the pipeline was padding.
+
+The slack is not needed, and the argument is exact rather than empirical.
+`k_or40` pre-marks every seed `0x40` before the BFS, so no seed can be pushed
+a second time; any `j` the BFS does push is reciprocally linked to a popped
+voxel, hence in the same union-find component and itself counted in `vcount`.
+So `tail <= vcount[root]`, and `vcount[root] >= nseed` because every seed is
+flagged and therefore counted. Instrumented `WATERZ_WS_QDIAG=1` to measure it
+anyway: `max(tail - vcount) == 0` over all 55M plateaus, `qused_max` only 121.
+A positive value there would have falsified the argument, and it also confirms
+the union-find is fully converged, since an unconverged plateau would split
+across parent values and overrun.
+
+    qtot 565,241,094 -> 63,943,344   (waste factor 8.84 -> 1.000)
+    peak 68.53 -> 51.15 B/vox
+    plateau BFS 11.2-14.3 ms -> 4.56 ms
+
+The 2.7x speedup is a side effect: the queue is 8.84x smaller and far more
+cache-friendly. That is ~7 ms off a 38 ms end-to-end budget, so this is a
+speed result as much as a memory one.
+
+Exact sizing removes the margin that was hiding a silent failure mode, so
+`k_indep_bfs` now takes `qsz` and an `overflow` flag and returns -3 loudly
+instead of running one plateau's BFS into the next plateau's slot.
+
+### Then lifetimes, a duplicated scan, and index width
+
+- `parent`, `flag`, `psum` are dead at `k_scatter_idx`/`k_keys_from_parent`
+  but were held to the end of the function, straight through the 61M-pair
+  radix sort. Freeing them at their last use, and likewise `keys_out`,
+  `start`, `start_ps`, `vcount` before the queue is allocated: 51.15 -> 32.14.
+- `psum` was a whole 4 B/vox duplicate of a scan that can run in place
+  (already done at `ws.cu:634` and `rag.cu:185`, so it was proven here).
+  After an in-place exclusive scan the corner predicate is still recoverable
+  as `ps[i+1] > ps[i]`, with the last voxel covered by a `last_f` read taken
+  before the scan. `flag` and `psum` become one buffer.
+- Corner and queue entries were int64 holding values that fit uint32, which
+  also halves the radix sort's payload traffic. `e9b_divide_d` now rejects
+  volumes above 4.29e9 voxels rather than wrapping silently. `qsz`/`qoff` are
+  uint32 for the same reason, and safely so: `qtot` is a sum of `vcount` over
+  distinct roots, so it is bounded by the voxel count.
+- Allocating the per-plateau queue arrays after releasing the per-corner ones,
+  instead of overlapping them: 25.99 -> 25.43.
+
+Cumulative 68.53 -> 25.43 B/vox, 2.69x, fingerprint and oracle equality
+unchanged at every step. Peak now sits at `divide/corners`: `parent` + `flag` +
+`vcount` at 4 B/vox each, the corner and key arrays, and 1.345 GiB of caller
+buffers.
+
+### What this does and does not buy at 2.16 Gvox
+
+    2.16 Gvox total   160 GiB -> 73.28 GiB      slabs needed   8 -> 4
+
+Still 3x over a 24 GiB card, so z-slab chunking remains mandatory. The
+projection also makes clear that no amount of working-set trimming can remove
+that: at 2.16 Gvox the input affinity alone is 6.48 GiB and the output labels
+8.64 GiB, so 15.1 GiB of a 24 GiB card is consumed by the volume's own I/O
+before any working buffer exists. The slab design therefore has to stream
+affinity in and labels out, not merely partition the working set.
