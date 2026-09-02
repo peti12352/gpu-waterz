@@ -3,7 +3,44 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <map>
 #include <cub/cub.cuh>
+
+// Device allocation accounting; see the matching note in ws.cu. The RAG's hash
+// table is the single largest buffer in the pipeline at large volumes, so its
+// exact size matters for the 24 GB question.
+static size_t g_rag_cur = 0;
+static size_t g_rag_peak = 0;
+static std::map<void*, size_t>& rag_book() {
+    static std::map<void*, size_t> m;
+    return m;
+}
+
+static cudaError_t rag_tracked_malloc(void** p, size_t n) {
+    cudaError_t e = cudaMalloc(p, n);
+    if (e == cudaSuccess && *p) {
+        rag_book()[*p] = n;
+        g_rag_cur += n;
+        if (g_rag_cur > g_rag_peak) g_rag_peak = g_rag_cur;
+    }
+    return e;
+}
+
+static cudaError_t rag_tracked_free(void* p) {
+    auto it = rag_book().find(p);
+    if (it != rag_book().end()) {
+        g_rag_cur -= it->second;
+        rag_book().erase(it);
+    }
+    return cudaFree(p);
+}
+
+extern "C" void rag_mem_reset(void) { g_rag_peak = g_rag_cur; }
+extern "C" size_t rag_mem_peak(void) { return g_rag_peak; }
+extern "C" size_t rag_mem_cur(void) { return g_rag_cur; }
+
+#define cudaMalloc(p, n) rag_tracked_malloc((void**)(p), (n))
+#define cudaFree(p) rag_tracked_free((void*)(p))
 
 // isum accumulates the RAW uint8 affinity bytes, not byte/255 as a float.
 //

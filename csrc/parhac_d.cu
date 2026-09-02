@@ -19,6 +19,46 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <map>
+
+// Device allocation accounting; see the matching note in ws.cu.
+//
+// Only this file's explicit cudaMalloc calls are counted. thrust allocates its
+// own scratch for sort_by_key and reduce_by_key through a separate path, so the
+// reported figure is a lower bound on the agglomeration's true peak and is
+// labelled as such by the reporting script.
+static size_t g_agg_cur = 0;
+static size_t g_agg_peak = 0;
+static std::map<void*, size_t>& agg_book() {
+    static std::map<void*, size_t> m;
+    return m;
+}
+
+static cudaError_t agg_tracked_malloc(void** p, size_t n) {
+    cudaError_t e = cudaMalloc(p, n);
+    if (e == cudaSuccess && *p) {
+        agg_book()[*p] = n;
+        g_agg_cur += n;
+        if (g_agg_cur > g_agg_peak) g_agg_peak = g_agg_cur;
+    }
+    return e;
+}
+
+static cudaError_t agg_tracked_free(void* p) {
+    auto it = agg_book().find(p);
+    if (it != agg_book().end()) {
+        g_agg_cur -= it->second;
+        agg_book().erase(it);
+    }
+    return cudaFree(p);
+}
+
+extern "C" void agg_mem_reset(void) { g_agg_peak = g_agg_cur; }
+extern "C" size_t agg_mem_peak(void) { return g_agg_peak; }
+extern "C" size_t agg_mem_cur(void) { return g_agg_cur; }
+
+#define cudaMalloc(p, n) agg_tracked_malloc((void**)(p), (n))
+#define cudaFree(p) agg_tracked_free((void*)(p))
 
 struct KeepOn {
     __host__ __device__ bool operator()(uint8_t k) const { return k != 0; }

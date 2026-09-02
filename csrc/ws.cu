@@ -5,6 +5,53 @@
 #include <cstdio>
 #include <vector>
 #include <algorithm>
+#include <map>
+
+// Device allocation accounting.
+//
+// TASK's graded volume is 2.16 Gvox on a 24 GB 3090 Ti, and the footprint
+// cannot be measured there directly because it does not fit. Routing every
+// allocation in this file through a counter gives an exact peak at a size that
+// does fit, from which the per-voxel coefficients, and therefore the larger
+// volumes, follow. Counting beats hand-tracing the allocation list: these
+// functions call each other and free at different depths, so the peak is not
+// obvious by inspection.
+//
+// The macros are defined after all includes, so header and template code is
+// already parsed and unaffected. CUB is always called here with explicit temp
+// storage, so it performs no hidden allocations of its own.
+static size_t g_mem_cur = 0;
+static size_t g_mem_peak = 0;
+static std::map<void*, size_t>& mem_book() {
+    static std::map<void*, size_t> m;
+    return m;
+}
+
+static cudaError_t ws_tracked_malloc(void** p, size_t n) {
+    cudaError_t e = cudaMalloc(p, n);
+    if (e == cudaSuccess && *p) {
+        mem_book()[*p] = n;
+        g_mem_cur += n;
+        if (g_mem_cur > g_mem_peak) g_mem_peak = g_mem_cur;
+    }
+    return e;
+}
+
+static cudaError_t ws_tracked_free(void* p) {
+    auto it = mem_book().find(p);
+    if (it != mem_book().end()) {
+        g_mem_cur -= it->second;
+        mem_book().erase(it);
+    }
+    return cudaFree(p);
+}
+
+extern "C" void ws_mem_reset(void) { g_mem_peak = g_mem_cur; }
+extern "C" size_t ws_mem_peak(void) { return g_mem_peak; }
+extern "C" size_t ws_mem_cur(void) { return g_mem_cur; }
+
+#define cudaMalloc(p, n) ws_tracked_malloc((void**)(p), (n))
+#define cudaFree(p) ws_tracked_free((void*)(p))
 
 #ifndef SENT
 #define SENT 0xffffffffu

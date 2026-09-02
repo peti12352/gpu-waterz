@@ -852,6 +852,54 @@ be satisfied by a stable-but-wrong builder.
 Note `rag.npz` comes from the CPU oracle, so the AGG gates are decoupled from
 this change and the E6s VOI pass above is unaffected by it.
 
+## C1 — the 24 GB memory wall is 6.7x, not the 1.6x previously assumed
+
+`scripts/c1_memory_budget.py`, `data/cache/c1_memory_budget.json`. Every
+cudaMalloc in ws.cu / rag.cu / parhac_d.cu is now routed through an in-library
+counter, so these are exact allocation figures, not estimates. Both stages
+report `leaked=0`, i.e. every free matched, so the counters are self-consistent.
+
+Measured at val (125x1200x1200 = 180 Mvox):
+
+    watershed peak  11.489 GiB   68.53 B/vox   nfrag=2175400
+    rag peak         2.871 GiB   17.12 B/vox   nedge=7505458
+    concurrent peak 13.33 GiB    (max stage + resident aff/seg/out)
+
+Projected (linear in voxels, which is right for the benchmark volumes because
+make_big.py tiles val, so plateau/corner density is preserved):
+
+    volume                  WS        RAG      io       peak    fits 24 GiB
+    val 180 Mvox         11.49 G    2.87 G   1.84 G   13.33 G   yes
+    1.44 Gvox            91.91 G   22.97 G  14.75 G  106.66 G   NO
+    2.16 Gvox           137.87 G   34.45 G  22.13 G  159.99 G   NO   <-- 6.7x
+
+Where the watershed's 68.53 B/vox goes, from the E9b diagnostics
+(`ncorner=61035574 nplat=55032772 qtot=565241094`):
+
+    q            qtot * 8  = 4.21 GiB   <-- largest single buffer, 3.14 ent/vox
+    parent/flag/psum/vcount  4 * 4 B/vox = 2.68 GiB
+    basin UF stage           ~20 B/vox   = 3.35 GiB
+    corners_in/out           nC * 8 * 2  = 0.91 GiB
+    plat_begin/nseed/root/qsz/qoff  P*20 = 1.02 GiB
+    keys_in/out, start, start_ps        = 0.91 GiB
+
+Consequences, and they reorder the whole plan:
+
+1. Z-slab chunking is **mandatory**, not an optimization. At 68.53 B/vox plus
+   resident aff/seg/out, a slab fitting in ~20 GiB of usable VRAM is at most
+   ~270 Mvox, so 2.16 Gvox needs **8 or more slabs** with halos and seam
+   stitching.
+2. The memory blocker, not the speed gap, is the critical path. No amount of
+   agglomeration tuning makes 2.16 Gvox run on a 24 GB card.
+3. Cheapest identified reductions, in order of size: `q` is int64 but the
+   graded volume has 2.16e9 < 2^32 voxels, so uint32 indices halve the largest
+   buffer (-2.1 GiB at val scale equivalent); `flag`/`psum` are separate 4 B/vox
+   arrays that can share storage with an in-place scan; `vcount` is only needed
+   per plateau, not per voxel.
+
+Not yet fixed. Recorded so the 2 Gvox/s claim is not attempted on a card that
+provably cannot hold the volume.
+
 ## Measurement bug found in `scripts/e6s_parhac.py`
 
 The script branches on `WATERZ_PAPER_E6S`, but `csrc/parhac_d.cu` reads
