@@ -1189,3 +1189,56 @@ structurally nondeterministic earlier and is not the production path.
 question applies to it: whether `compact_radix` allocates or synchronizes per
 call. `parhac_dev`, the older profiling path behind a3 and p0y, still has the
 original thrust sorts; it is not the production path so it was left alone.
+
+## Compaction onto CUB too: 1.65x, and p0aa's wall is mostly its own instrument
+
+`compact_radix` had the same pathology as the proposal sort, four times per
+call. `thrust::copy_if` and both `reduce_by_key` calls return an iterator or a
+count, so thrust must synchronize the device to hand it back, and each call
+also allocated its own temporaries. At ~1840 compactions that was the largest
+phase left.
+
+The CUB equivalents write their counts to device memory and take caller-owned
+scratch, so a `CompactScratch` (one temp buffer sized by querying all three
+ops at `n_edges`, plus two count slots) is allocated once per host function
+and threaded through. What remains is two D2H copies per compaction, for the
+two counts that genuinely decide later launch geometry. No new buffers were
+needed: `tv` was already dead at that point and takes the sorted index list.
+
+    compact   8766 ms -> 5306 ms    1.65x
+
+Unlike the proposal sort this one is exactly order-independent, so
+bit-equality was the right gate and it holds. Affinity sums are integral
+affinity-byte counts held exactly in a double and counts are int64, so
+within-segment order cannot change a reduction result:
+
+- A2 `byte_identical=True ndiff=0`
+- unique-parent fingerprint `[294165, 322000, 345131, 379293]`, unchanged
+- ACCURACY GATE: PASS at all four thresholds
+
+Where the production path now stands, all on the contended card:
+
+    E6s device @T=0.3       25467 ms -> 9754 ms     2.61x
+    four-threshold grade    34265 ms -> 12297 ms    2.79x
+
+### p0aa's wall time is 74% instrumentation
+
+Worth writing down before it misleads the next measurement. p0aa reports
+wall 37192 ms, but the phases sum to 9573 ms. The 27619 ms gap is almost
+exactly the gap in the previous run too (52634 wall against ~25000 of phases),
+i.e. **the unaccounted time is a constant ~27.6 s that did not move when two
+phases got 3.5x faster.**
+
+It is the `EvAccum` instrumentation. Ten instrumented regions over 1840 inner
+iterations is ~18400 event stops, each of which synchronizes to read the
+elapsed time, and each of those syncs waits for the co-tenant process's
+kernels to drain as well. The same mechanism that made the thrust calls
+expensive makes the timer expensive.
+
+So: read p0aa for phase *ratios* only, never for magnitude. Magnitude comes
+from the uninstrumented paths, a2's `device_ms` and a1's `device_ms`, which is
+why the numbers above are quoted from those. This also means the real phase
+figures are somewhat smaller than printed, since each region's own event pair
+is inside it.
+
+Next largest real phase is compact at 5306 ms, then compress at 2392 ms.

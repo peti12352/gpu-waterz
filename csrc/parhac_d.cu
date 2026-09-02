@@ -1294,12 +1294,54 @@ __global__ void k_gather_smct(
     cto[j] = ct[e];
 }
 
+// CUB scratch for compact_radix, owned by the caller. compact_radix runs once
+// per inner iteration, so allocating inside it would reintroduce exactly the
+// per-call cost this is meant to remove.
+struct CompactScratch {
+    void* tmp;
+    size_t bytes;
+    int* cnt;  // two slots: selected count, then run count
+};
+
+static void compact_scratch_init(CompactScratch& csr, int64_t n)
+{
+    csr.tmp = nullptr;
+    csr.bytes = 0;
+    csr.cnt = nullptr;
+    if (n < 1) n = 1;
+    unsigned long long* k = nullptr;
+    uint32_t* s = nullptr;
+    double* d = nullptr;
+    int* c = nullptr;
+    size_t a = 0, b = 0, e = 0;
+    cub::DeviceSelect::Flagged(
+        nullptr, a, thrust::make_counting_iterator<uint32_t>(0),
+        (uint8_t*)nullptr, s, c, (int)n);
+    cub::DeviceRadixSort::SortPairs(nullptr, b, k, k, s, s, (int)n);
+    cub::DeviceReduce::ReduceByKey(
+        nullptr, e, k, k, d, d, c, cub::Sum(), (int)n);
+    csr.bytes = a > b ? a : b;
+    if (e > csr.bytes) csr.bytes = e;
+    cudaMalloc(&csr.tmp, csr.bytes);
+    cudaMalloc(&csr.cnt, 8);
+}
+
+static void compact_scratch_free(CompactScratch& csr)
+{
+    cudaFree(csr.tmp);
+    cudaFree(csr.cnt);
+    csr.tmp = nullptr;
+    csr.cnt = nullptr;
+    csr.bytes = 0;
+}
+
 static int compact_radix(
     uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
     uint32_t* dparent, int nnode, int64_t n, int64_t* n_out,
     int be, int threads,
     uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
-    unsigned long long* dkey, unsigned long long* dkeyo, double TL = 0.0)
+    unsigned long long* dkey, unsigned long long* dkeyo, CompactScratch& csr,
+    double TL = 0.0)
 {
     int bn = (nnode + threads - 1) / threads;
     k_compress<<<bn, threads>>>(dparent, nnode);
@@ -1315,15 +1357,23 @@ static int compact_radix(
     // moves far less traffic and lets thrust dispatch a plain radix sort.
     //
     // `tu` is unused from here on and is exactly n uint32s, so it carries the
-    // index list with no extra allocation.
+    // index list with no extra allocation, and `tv` takes the sorted copy.
+    //
+    // These four steps used to be thrust calls. Three of them return an
+    // iterator or a count, so thrust had to synchronize the device to hand it
+    // back, and each also allocated its own temporaries; at ~1840 compactions
+    // that was 8766 ms, the largest phase left after the proposal sort was
+    // fused. The CUB equivalents write their counts to device memory and take
+    // caller-owned scratch, which leaves just two D2H copies per compaction,
+    // for the two counts that genuinely decide later launch geometry.
     uint32_t* sel = tu;
-    (void)tv;
-    thrust::device_ptr<uint32_t> psel(sel);
-    auto sel_end = thrust::copy_if(
-        thrust::make_counting_iterator<uint32_t>(0),
-        thrust::make_counting_iterator<uint32_t>((uint32_t)n),
-        thrust::device_ptr<uint8_t>(dkeep), psel, KeepOn());
-    int64_t m = sel_end - psel;
+    uint32_t* sel2 = tv;
+    cub::DeviceSelect::Flagged(
+        csr.tmp, csr.bytes, thrust::make_counting_iterator<uint32_t>(0),
+        dkeep, sel, csr.cnt, (int)n);
+    int hm = 0;
+    cudaMemcpy(&hm, csr.cnt, 4, cudaMemcpyDeviceToHost);
+    int64_t m = hm;
     if (m <= 0) {
         *n_out = 0;
         return 1;
@@ -1331,25 +1381,25 @@ static int compact_radix(
     int bm = (int)((m + threads - 1) / threads);
     if (bm < 1) bm = 1;
     k_key_from_sel<<<bm, threads>>>(du, dv, sel, dkey, m);
-    thrust::sort_by_key(
-        thrust::device_ptr<unsigned long long>(dkey),
-        thrust::device_ptr<unsigned long long>(dkey) + m, psel);
-    k_gather_smct<<<bm, threads>>>(dsm, dct, sel, tsm, tct, m);
+    cub::DeviceRadixSort::SortPairs(
+        csr.tmp, csr.bytes, dkey, dkeyo, sel, sel2, (int)m);
+    k_gather_smct<<<bm, threads>>>(dsm, dct, sel2, tsm, tct, m);
 
-    // Two plain reduce_by_key passes instead of one zip pass: the segment
+    // Two plain ReduceByKey passes instead of one zip pass: the segment
     // boundaries are recomputed, but each pass is a contiguous scan over a
     // single array. Sums are integral affinity-byte counts held exactly in a
     // double (see k_scale_sm_bytes), so the reduction is exact either way.
-    auto keys_in = thrust::device_ptr<unsigned long long>(dkey);
-    auto keys_out = thrust::device_ptr<unsigned long long>(dkeyo);
-    auto red = thrust::reduce_by_key(
-        keys_in, keys_in + m, thrust::device_ptr<double>(tsm),
-        keys_out, thrust::device_ptr<double>(dsm));
-    int64_t m2 = red.first - keys_out;
-    thrust::reduce_by_key(
-        keys_in, keys_in + m, thrust::device_ptr<int64_t>(tct),
-        keys_out, thrust::device_ptr<int64_t>(dct));
-    k_unpack_uvkey<<<(int)((m2 + threads - 1) / threads), threads>>>(dkeyo, du, dv, m2);
+    // dkey is free once the sort has consumed it, so it takes the unique keys.
+    cub::DeviceReduce::ReduceByKey(
+        csr.tmp, csr.bytes, dkeyo, dkey, tsm, dsm, csr.cnt + 1, cub::Sum(),
+        (int)m);
+    int hm2 = 0;
+    cudaMemcpy(&hm2, csr.cnt + 1, 4, cudaMemcpyDeviceToHost);
+    int64_t m2 = hm2;
+    cub::DeviceReduce::ReduceByKey(
+        csr.tmp, csr.bytes, dkeyo, dkey, tct, dct, csr.cnt + 1, cub::Sum(),
+        (int)m);
+    k_unpack_uvkey<<<(int)((m2 + threads - 1) / threads), threads>>>(dkey, du, dv, m2);
     *n_out = m2;
     return 1;
 }
@@ -1735,6 +1785,8 @@ static int parhac_e6s_dev(
     cub::DeviceRadixSort::SortPairs(nullptr, psort_bytes, pkey_in, pkey_out,
                                     ppay_in, ppay_out, nnode);
     cudaMalloc(&psort_tmp, psort_bytes);
+    CompactScratch csr;
+    compact_scratch_init(csr, n_edges);
     ddbg = dnact = dndirty = dnstar = nullptr;
     ddirty_blue = ddirty_star = nullptr;
     if (zprof) {
@@ -1814,7 +1866,7 @@ static int parhac_e6s_dev(
             if (TL < T) TL = T;
             ev_compact.start();
             compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                be, threads, tu, tv, tsm, tct, dkey, dkeyo);
+                be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr);
             ev_compact.stop();
             if (nlive <= 0) break;
             be = (int)((nlive + threads - 1) / threads);
@@ -1932,7 +1984,7 @@ static int parhac_e6s_dev(
                     if (hm == 0) break;
                     ev_compact.start();
                     compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                        be, threads, tu, tv, tsm, tct, dkey, dkeyo, 0.0);
+                        be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0);
                     ev_compact.stop();
                     be = (int)((nlive + threads - 1) / threads);
                     if (be < 1) be = 1;
@@ -1971,6 +2023,7 @@ static int parhac_e6s_dev(
     cudaFree(dfrozen); cudaFree(dprop);
     cudaFree(pkey_in); cudaFree(pkey_out);
     cudaFree(ppay_in); cudaFree(ppay_out); cudaFree(psort_tmp);
+    compact_scratch_free(csr);
     cudaFree(dreds); cudaFree(dblues); cudaFree(dadd);
     cudaFree(dnmerge); cudaFree(dnprop); cudaFree(dkeep);
     cudaFree(tu); cudaFree(tv); cudaFree(tsm); cudaFree(tct); cudaFree(dblk);
@@ -2196,6 +2249,8 @@ static int parhac_e6t_dev(
     cudaMalloc(&dkeyo, (size_t)n_edges * 8);
     int nblk = 256;
     cudaMalloc(&dblk, (size_t)nblk * 8);
+    CompactScratch csr;
+    compact_scratch_init(csr, n_edges);
 
     int ntab = next_pow2((int)(n_edges * 4 + 1024));
     if (ntab < 2048) ntab = 2048;
@@ -2206,6 +2261,7 @@ static int parhac_e6t_dev(
     int ovf_cap = (int)(n_edges * 4 + 16);
     if (cudaMalloc(&dtab, (size_t)ntab * sizeof(EHash)) != cudaSuccess) {
         std::fprintf(stderr, "E6t_OOM hash ntab=%d\n", ntab);
+        compact_scratch_free(csr);
         return 0;
     }
     cudaMalloc(&ddeg, (size_t)nnode * 4);
@@ -2288,7 +2344,7 @@ static int parhac_e6t_dev(
             double TL = wmax / (1.0 + eps);
             if (TL < T) TL = T;
             compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                be, threads, tu, tv, tsm, tct, dkey, dkeyo);
+                be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr);
             if (nlive <= 0) break;
             be = (int)((nlive + threads - 1) / threads);
             if (be < 1) be = 1;
@@ -2339,7 +2395,7 @@ static int parhac_e6t_dev(
                         nkill_acc += 0;
                         if (hf || (nkill_acc * 2 > (int)nlive)) {
                             compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                                be, threads, tu, tv, tsm, tct, dkey, dkeyo, 0.0);
+                                be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0);
                             be = (int)((nlive + threads - 1) / threads);
                             if (be < 1) be = 1;
                             e6t_rebuild(du, dv, dsm, dct, nlive, dparent, nnode, threads,
@@ -2393,7 +2449,7 @@ static int parhac_e6t_dev(
                     int rebuild = hfail || (nkill_acc * 2 > (int)nlive);
                     if (rebuild) {
                         compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                            be, threads, tu, tv, tsm, tct, dkey, dkeyo, 0.0);
+                            be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0);
                         be = (int)((nlive + threads - 1) / threads);
                         if (be < 1) be = 1;
                         e6t_rebuild(du, dv, dsm, dct, nlive, dparent, nnode, threads,
@@ -2442,6 +2498,7 @@ static int parhac_e6t_dev(
     cudaFree(dnmerge); cudaFree(dnprop); cudaFree(dkeep);
     cudaFree(tu); cudaFree(tv); cudaFree(tsm); cudaFree(tct); cudaFree(dblk);
     cudaFree(dkey); cudaFree(dkeyo);
+    compact_scratch_free(csr);
     cudaFree(dtab); cudaFree(ddeg); cudaFree(dcur); cudaFree(doff); cudaFree(dlen);
     cudaFree(dadj); cudaFree(ovf_head); cudaFree(ovf_eid); cudaFree(ovf_nxt);
     cudaFree(dovf_used); cudaFree(dfail); cudaFree(dgc); cudaFree(dgc2);
