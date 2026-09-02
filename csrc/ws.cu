@@ -1257,6 +1257,7 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     uint32_t* parent = nullptr;
     uint32_t* flag = nullptr;
     uint32_t* vcount = nullptr;
+    ws_mem_mark("divide/enter");
     cudaMalloc(&parent, (size_t)size * 4);
     cudaMalloc(&flag, (size_t)size * 4);
     cudaMalloc(&vcount, (size_t)size * 4);
@@ -1327,10 +1328,12 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     uint32_t* corners_out = nullptr;
     uint32_t* keys_in = nullptr;
     uint32_t* keys_out = nullptr;
+    // Only the two sort *inputs* are needed while parent and flag are still
+    // live; the outputs are not touched until the sort itself. Allocating them
+    // here would overlap 2 * nC uint32s, 0.49 GiB at val, with the 1.34 GiB of
+    // parent and flag for no reason, and that overlap is the pipeline's peak.
     cudaMalloc(&corners_in, (size_t)nC * 4);
-    cudaMalloc(&corners_out, (size_t)nC * 4);
     cudaMalloc(&keys_in, (size_t)nC * 4);
-    cudaMalloc(&keys_out, (size_t)nC * 4);
     ws_mem_mark("divide/corners");
     k_scatter_idx_u32<<<blocks, threads>>>(psum, last_f, corners_in, size);
     int cb = (nC + 255) / 256;
@@ -1344,6 +1347,8 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     cudaFree(flag);
     flag = nullptr;
     psum = nullptr;
+    cudaMalloc(&corners_out, (size_t)nC * 4);
+    cudaMalloc(&keys_out, (size_t)nC * 4);
     ws_mem_mark("divide/pre-sort");
     {
         void* tmp = nullptr;

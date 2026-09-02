@@ -1475,3 +1475,41 @@ result is unaffected. Worth confirming rather than assuming.
 
 `d_bench.py` refuses to grade while the card is shared, and it is shared again,
 so the median-of-5 throughput number still needs an idle window.
+
+## Watershed peak 25.43 -> 22.71 B/vox by not overlapping two buffer sets
+
+Memory is the hard blocker for the graded benchmark, and unlike timing it is
+immune to the co-tenant, so it is the right thing to work on while the card is
+shared.
+
+`WATERZ_WS_MEMLOG=1` puts the peak at the `divide/corners` checkpoint. Adding
+a mark at function entry pins the composition down exactly, at val:
+
+    divide/enter    1.341 GiB   inherited, 8 B/vox
+    + parent, flag, vcount      3 x 4 B/vox   -> 3.353 GiB at divide/uf
+    + corners_in, keys_in, corners_out, keys_out, 4 x nC uint32
+                                              -> 4.262 GiB, the peak
+
+The four corner arrays are the inputs and outputs of a 61M-pair radix sort.
+Only the *inputs* are needed while `parent` and `flag` are still live, since
+the outputs are untouched until the sort runs, and `parent` and `flag` are
+freed immediately after the two kernels that fill the inputs. So allocating
+the outputs after those frees, rather than before, removes a 0.49 GiB overlap
+with 1.34 GiB that existed for no reason.
+
+    peak   4.262 GiB -> 3.808 GiB     25.43 -> 22.71 B/vox
+
+Gated by c2: deterministic with ndiff 0, nfrag 2175400 and bg 506568 both
+matching TASK, region-size fingerprint equal to the CPU oracle with
+array_equal True, nothing leaked.
+
+Projection for the graded volume improves but does not change the conclusion:
+
+    2.16 Gvox needs 67.82 GiB of a 24 GiB card   (was 73.28)
+    largest z-slab fitting ~20 GiB usable: ~637 Mvox, so >= 4 slabs
+
+At the peak window the remaining live set is 8 B/vox inherited, 12 B/vox of
+parent/flag/vcount and 2.7 B/vox of sort inputs. `vcount` is the next
+candidate, being 4 B/vox held across the corner phase for a `k_plat_meta` call
+that happens after it, though it is computed during the union-find phase
+before it, so moving it is not a lifetime tweak but a restructuring.
