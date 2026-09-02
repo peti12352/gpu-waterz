@@ -1242,3 +1242,95 @@ figures are somewhat smaller than printed, since each region's own event pair
 is inside it.
 
 Next largest real phase is compact at 5306 ms, then compress at 2392 ms.
+
+## What a host round-trip actually costs: 883 us, and why that is a trap
+
+Goal was to find where the remaining 9854 ms of E6s at T=0.3 goes. Kernels in
+the phase split come to ~200 ms outside compact, compress and sort, so the
+suspicion was that the loop is latency-bound: four blocking copies per inner
+iteration (proposal count, merge count, and the two counts inside
+compact_radix), 7360 in total.
+
+Added `WATERZ_SYNC_PROBE=k`, which inserts k extra copies per iteration, and
+`scripts/a4_sync_cost.py`, which sweeps k and fits a line. The slope is a
+better instrument than any absolute timing here because every point pays the
+same contention.
+
+**First attempt was wrong and said the opposite.** With the probe as a bare
+`cudaMemcpy`, the slope came out at -2 us, i.e. nothing, and I briefly
+concluded round-trips were free. They were free *as written*: the probe copies
+followed the real copy with nothing enqueued in between, so they landed on a
+stream that was already drained and returned immediately. The cost of a
+round-trip is the pipeline drain, and a drain only exists when there is queued
+work to drain. Launching a trivial kernel before each probe copy fixes it:
+
+    median device_ms   k=0: 9854   k=1: 11498   k=2: 13126   k=4: 16356
+    slope 883 us per round-trip, max fit residual 12 ms over a 6500 ms range
+    the loop's own 7360 -> 6498 ms, 66% of the 9854 ms baseline
+
+Iterations and merges are identical at every k, so the probe changes nothing
+but timing.
+
+### The trap
+
+883 us is far too large for a drain. On an idle card it is 10-20 us. That
+number is a GPU scheduling quantum: each drain hands the device to the
+co-tenant process and waits to be scheduled again. **It is a property of
+sharing the card, not of this code.** On a dedicated card those same 7360
+round-trips cost on the order of 110 ms, not 6500 ms.
+
+So the finding is not "restructure the loop for device-side control". It is:
+
+- every absolute timing taken on this card is contaminated in a way that
+  scales with *sync count*, not with work, so it cannot be used to rank
+  optimizations. a3's count-based accounting and per-kernel work analysis are
+  the only sound basis until the card is free.
+- the p0aa phase split is distorted in a specific direction worth knowing:
+  each EvAccum stop drains, so the copy that follows it is instant. That is
+  why `d2h` reads 22 ms for 1840 iterations, ~12 us per copy, when the same
+  copy costs 883 us uninstrumented. The nprop and nmerge drains are real but
+  are hidden in the unmeasured gaps between regions. compact's two internal
+  drains, by contrast, sit inside `ev_compact` and are counted there.
+- reducing round-trips and kernel launches is still worth doing, since it
+  helps under contention and is neutral otherwise. It is just not worth
+  restructuring the algorithm around.
+
+### Redundant compress removed, worth nothing, kept anyway
+
+`compact_radix` opened with a full `k_compress` sweep, and the inner loop
+compresses immediately before calling it with only `k_freeze` in between,
+which touches sz and frozen but never parent. So it was pure duplicate work
+and is now skipped via `recompress=false` from that call site; the layer-level
+call follows a weight scan and keeps it.
+
+Measured gain: none. compact went 5306 -> 5345 ms, i.e. unchanged. The reason
+is that `k_compress` walks to the root, so after the first pass every entry
+already points at a root and the second pass is two reads per node, ~17 MB.
+The 2381 ms in the `compress` phase is the pass right after `k_accept_reds`,
+where the chains are genuinely long. Kept the change since it is strictly less
+work, but the cost model that motivated it was wrong.
+
+Gated bit-identical: A2 `byte_identical=True ndiff=0`, unique-parent
+fingerprint `[294165, 322000, 345131, 379293]` unchanged, ACCURACY GATE PASS.
+
+### Next, on work rather than on timings
+
+`compact_radix` runs an 8-pass 64-bit radix sort over the whole live edge list
+every inner iteration, for the sole purpose of grouping duplicate keys so
+`ReduceByKey` can merge parallel edges. That is ~28 kernel launches and O(m
+log m) traffic per iteration to do an O(m) job.
+
+This file already contains `hash_combine_live`, complete and currently
+unreferenced: clear table, insert with atomicAdd on the sums, emit. It should
+be determinism-safe for the same reason the RAG fix was, namely that the sums
+are exact integers after `k_scale_sm_bytes`, and edge *order* does not affect
+the result because propose picks by content-based priority under atomicMax.
+Two things to watch: `k_hash_clear` currently clears a table sized from
+`n_edges`, ~384 MB per iteration, which must be sized from the current `nlive`
+instead; and `k_hash_emit` compacts with an atomic, so the output order is
+nondeterministic and the claim that order does not matter has to be *tested*
+with A2, not assumed.
+
+Also queued: `sort` is 1658 ms for a median nprop of 0 and ~2700 average,
+which cannot be work. A 64-bit CUB device sort is ~16 kernel launches; a
+single-block `cub::BlockRadixSort` fast path for small nprop would make it one.

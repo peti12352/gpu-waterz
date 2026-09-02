@@ -1294,6 +1294,28 @@ __global__ void k_gather_smct(
     cto[j] = ct[e];
 }
 
+// Measurement hook, not part of the algorithm. The inner loop makes four
+// device-to-host copies per iteration: the proposal count, the merge count,
+// and the two counts inside compaction. WATERZ_SYNC_PROBE=k adds k more per
+// iteration so the marginal cost of one can be read off a slope instead of
+// guessed at. See scripts/a4_sync_cost.py.
+//
+// Each probe launches a kernel first. Without it the probe copies land on a
+// stream the preceding real copy already drained, so they return immediately
+// and measure nothing; the cost of a round-trip is the pipeline drain, which
+// only exists when there is queued work to drain. The atomicAdd of zero
+// leaves the counter's value alone.
+__global__ void k_probe_touch(int* p)
+{
+    if (threadIdx.x == 0) atomicAdd(p, 0);
+}
+
+static int sync_probe()
+{
+    const char* s = std::getenv("WATERZ_SYNC_PROBE");
+    return s ? std::atoi(s) : 0;
+}
+
 // CUB scratch for compact_radix, owned by the caller. compact_radix runs once
 // per inner iteration, so allocating inside it would reintroduce exactly the
 // per-call cost this is meant to remove.
@@ -1341,10 +1363,16 @@ static int compact_radix(
     int be, int threads,
     uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
     unsigned long long* dkey, unsigned long long* dkeyo, CompactScratch& csr,
-    double TL = 0.0)
+    double TL = 0.0, bool recompress = true)
 {
     int bn = (nnode + threads - 1) / threads;
-    k_compress<<<bn, threads>>>(dparent, nnode);
+    // k_compress walks each node to its root, so after one pass every entry
+    // already points at a root and a second pass cannot change anything. The
+    // inner loop compresses immediately before calling here and only k_freeze
+    // runs in between, which touches sz and frozen but never parent, so that
+    // caller passes recompress=false. It is a full pointer-chasing sweep of
+    // all nnode entries and it ran twice per iteration.
+    if (recompress) k_compress<<<bn, threads>>>(dparent, nnode);
     k_rewrite<<<be, threads>>>(du, dv, dsm, dct, dparent, n, dkeep, TL);
 
     // Select surviving edge INDICES rather than edge records.
@@ -1827,6 +1855,7 @@ static int parhac_e6s_dev(
     std::vector<double> hblk((size_t)nblk);
     std::vector<uint32_t> hparent((size_t)nnode);
     int64_t nlive = n_edges;
+    const int nprobe = sync_probe();
     if (max_outer < 1) max_outer = 64;
     {
         int be0 = (int)((n_edges + threads - 1) / threads);
@@ -1957,6 +1986,11 @@ static int parhac_e6s_dev(
                     ev_d2h.start();
                     cudaMemcpy(&hm, dnmerge, 4, cudaMemcpyDeviceToHost);
                     ev_d2h.stop();
+                    for (int q = 0; q < nprobe; ++q) {
+                        int probe = 0;
+                        k_probe_touch<<<1, 32>>>(dnmerge);
+                        cudaMemcpy(&probe, dnmerge, 4, cudaMemcpyDeviceToHost);
+                    }
                     if (zprof && hm > 0) {
                         cudaMemset(ddirty_blue, 0, (size_t)nnode);
                         cudaMemset(ddirty_star, 0, (size_t)nnode);
@@ -1984,7 +2018,7 @@ static int parhac_e6s_dev(
                     if (hm == 0) break;
                     ev_compact.start();
                     compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
-                        be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0);
+                        be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0, false);
                     ev_compact.stop();
                     be = (int)((nlive + threads - 1) / threads);
                     if (be < 1) be = 1;
