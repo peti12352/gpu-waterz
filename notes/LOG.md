@@ -1007,3 +1007,38 @@ that: at 2.16 Gvox the input affinity alone is 6.48 GiB and the output labels
 8.64 GiB, so 15.1 GiB of a 24 GiB card is consumed by the volume's own I/O
 before any working buffer exists. The slab design therefore has to stream
 affinity in and labels out, not merely partition the working set.
+
+## The plateau union-find ran 40 rounds and needs 6
+
+`e9b_divide_d` ran its hook/compress loop a fixed 40 times. Each round sweeps
+every voxel and reads its six neighbours' bits and parents, twice over, so a
+round is tens of GB of traffic and this loop dominates the watershed stage:
+the whole thing measures `uf_ms=498` against `bfs_ms=4.1` for the plateau BFS.
+Spare rounds are the most expensive idle work in the pipeline.
+
+Replaced with a loop that stops when a round changes nothing, flagged by
+`atomicExch` from both the hook (when its `atomicMin` actually lowered a
+value) and the compress (when a parent moved). Measured: **6 to 7 rounds**, so
+the fixed count was doing ~6x the necessary work. Plateaus are shallow, which
+`qused_max=121` already implied, so no deeper convergence was ever needed.
+
+Terminating on both kernels being at a fixpoint is what makes this safe rather
+than merely faster. Everything downstream needs `parent` flattened to true
+roots, because `vcount` is indexed by `parent[i]`, and an unflattened parent
+would split a plateau's count across several nodes and undersize its BFS
+queue. Exiting only when hook and compress both change nothing means `parent`
+is a fixpoint of compress, i.e. fully flattened. The `uf_cap = 64` bound
+remains as a safety net and reports `NOT-CONVERGED`, with the queue overflow
+guard from the previous entry as the second line of defence.
+
+One observation worth recording: **the round count varies run to run, 6 or 7,
+while the output stays bit-identical.** That is expected and not a determinism
+violation. The `atomicMin` race order changes how quickly the loop converges,
+but the fixpoint it converges to is the component-wise minimum label, which is
+order-independent. C2 confirms `array_equal` against the CPU oracle either
+way. It does mean stage timings carry a round of jitter.
+
+Next candidate on this loop, not yet done: only ~36% of voxels (64M of 180M,
+from `qused_sum`) are in a plateau at all, so the rounds could sweep a
+compacted active list instead of the full volume, roughly 21 GB of traffic
+saved against ~1.5 GB to build the list.

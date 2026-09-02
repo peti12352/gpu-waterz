@@ -1036,7 +1036,11 @@ __global__ void k_parent_init(uint32_t* p, int64_t n) {
     if (i < n) p[i] = (uint32_t)i;
 }
 
-__global__ void k_hook_bidir(const uint8_t* bits, uint32_t* parent, int64_t Z, int64_t Y, int64_t X) {
+// changed lets the caller stop as soon as the plateau union-find has
+// converged instead of running a fixed round count. One atomicExch on a
+// single word per changed round is immaterial next to the sweep itself.
+__global__ void k_hook_bidir(const uint8_t* bits, uint32_t* parent, int* changed,
+                             int64_t Z, int64_t Y, int64_t X) {
     int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
     int64_t size = Z * Y * X;
     if (i >= size) return;
@@ -1052,9 +1056,19 @@ __global__ void k_hook_bidir(const uint8_t* bits, uint32_t* parent, int64_t Z, i
         if (!(bits[j] & (uint8_t)RBIT[d])) continue;
         uint32_t pj = parent[j];
         if (pi == pj) continue;
-        if (pi < pj) atomicMin(&parent[pj], pi);
-        else atomicMin(&parent[pi], pj);
+        uint32_t old = (pi < pj) ? atomicMin(&parent[pj], pi)
+                                 : atomicMin(&parent[pi], pj);
+        if (old > (pi < pj ? pi : pj)) atomicExch(changed, 1);
     }
+}
+
+__global__ void k_uf_compress_c(uint32_t* p, int* changed, int64_t n) {
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    uint32_t was = p[i];
+    uint32_t now = uf_find(p, (uint32_t)i);
+    p[i] = now;
+    if (now != was) atomicExch(changed, 1);
 }
 
 __global__ void k_count_v2(
@@ -1249,10 +1263,41 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     cudaMemset(vcount, 0, (size_t)size * 4);
     ws_mem_mark("divide/uf");
     k_parent_init<<<blocks, threads>>>(parent, size);
-    for (int r = 0; r < 40; ++r) {
-        k_hook_bidir<<<blocks, threads>>>(bits_d, parent, Z, Y, X);
-        k_uf_compress<<<blocks, threads>>>(parent, size);
+    // This loop ran a fixed 40 rounds. Each round sweeps every voxel and its
+    // six neighbours twice over, so a round costs tens of GB of traffic and
+    // spare rounds are the most expensive kind of idle work in the stage.
+    // Plateaus are shallow, so convergence comes far sooner than 40; run until
+    // a round changes nothing instead. The bound stays as a safety net, and
+    // not converging within it is reported rather than silently accepted,
+    // because everything downstream needs parent flattened to true roots:
+    // vcount is indexed by parent[i] and an unflattened parent would split a
+    // plateau's count across nodes and undersize its BFS queue.
+    int* uf_changed = nullptr;
+    cudaMalloc(&uf_changed, 4);
+    const int uf_cap = 64;
+    int uf_rounds = 0;
+    cudaEvent_t uev0, uev1;
+    cudaEventCreate(&uev0);
+    cudaEventCreate(&uev1);
+    cudaEventRecord(uev0);
+    for (int r = 0; r < uf_cap; ++r) {
+        cudaMemset(uf_changed, 0, 4);
+        k_hook_bidir<<<blocks, threads>>>(bits_d, parent, uf_changed, Z, Y, X);
+        k_uf_compress_c<<<blocks, threads>>>(parent, uf_changed, size);
+        int h = 0;
+        cudaMemcpy(&h, uf_changed, 4, cudaMemcpyDeviceToHost);
+        ++uf_rounds;
+        if (!h) break;
     }
+    cudaEventRecord(uev1);
+    cudaEventSynchronize(uev1);
+    float uf_ms = 0;
+    cudaEventElapsedTime(&uf_ms, uev0, uev1);
+    cudaEventDestroy(uev0);
+    cudaEventDestroy(uev1);
+    cudaFree(uf_changed);
+    fprintf(stderr, "E9b uf_rounds=%d/%d uf_ms=%.2f%s\n", uf_rounds, uf_cap,
+            uf_ms, uf_rounds >= uf_cap ? " NOT-CONVERGED" : "");
     k_corner_flag<<<blocks, threads>>>(bits_d, flag, Z, Y, X);
     k_count_v2<<<blocks, threads>>>(bits_d, flag, parent, vcount, Z, Y, X);
     // Capture the last flag before the scan overwrites it, then scan flag into
