@@ -8,6 +8,7 @@
 #include <thrust/reduce.h>
 #include <thrust/functional.h>
 #include <thrust/iterator/zip_iterator.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <thrust/tuple.h>
 #include <thrust/scan.h>
 #include <thrust/fill.h>
@@ -1177,6 +1178,36 @@ __global__ void k_unpack_uvkey(
     v[i] = (uint32_t)(key[i] & 0xffffffffull);
 }
 
+// Build the (u,v) sort key for a selected edge, reading through an index list
+// instead of a compacted copy of the edge records.
+__global__ void k_key_from_sel(
+    const uint32_t* u, const uint32_t* v, const uint32_t* sel,
+    unsigned long long* key, int64_t m)
+{
+    int64_t j = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (j >= m) return;
+    uint32_t e = sel[j];
+    uint32_t a = u[e], b = v[e];
+    if (a > b) {
+        uint32_t t = a;
+        a = b;
+        b = t;
+    }
+    key[j] = ((unsigned long long)a << 32) | (unsigned long long)b;
+}
+
+// Gather the 16 B payload once, after the key sort has settled the order.
+__global__ void k_gather_smct(
+    const double* sm, const int64_t* ct, const uint32_t* sel,
+    double* smo, int64_t* cto, int64_t m)
+{
+    int64_t j = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (j >= m) return;
+    uint32_t e = sel[j];
+    smo[j] = sm[e];
+    cto[j] = ct[e];
+}
+
 static int compact_radix(
     uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
     uint32_t* dparent, int nnode, int64_t n, int64_t* n_out,
@@ -1187,35 +1218,51 @@ static int compact_radix(
     int bn = (nnode + threads - 1) / threads;
     k_compress<<<bn, threads>>>(dparent, nnode);
     k_rewrite<<<be, threads>>>(du, dv, dsm, dct, dparent, n, dkeep, TL);
-    thrust::device_ptr<uint32_t> pu(du), pv(dv);
-    auto in = thrust::make_zip_iterator(thrust::make_tuple(
-        pu, pv, thrust::device_ptr<double>(dsm), thrust::device_ptr<int64_t>(dct)));
-    auto out = thrust::make_zip_iterator(thrust::make_tuple(
-        thrust::device_ptr<uint32_t>(tu), thrust::device_ptr<uint32_t>(tv),
-        thrust::device_ptr<double>(tsm), thrust::device_ptr<int64_t>(tct)));
-    auto end = thrust::copy_if(in, in + n, thrust::device_ptr<uint8_t>(dkeep), out, KeepOn());
-    int64_t m = end - out;
+
+    // Select surviving edge INDICES rather than edge records.
+    //
+    // This previously ran copy_if over a zip_iterator of (u,v,sum,count) and
+    // then sort_by_key with a zip_iterator of (sum,count) as the value. Both
+    // drag a 24 B / 16 B tuple payload through every pass as strided tuple
+    // loads and stores, which is the slow path in thrust. Sorting a 64-bit key
+    // against a 32-bit index, then gathering the payload once at the end,
+    // moves far less traffic and lets thrust dispatch a plain radix sort.
+    //
+    // `tu` is unused from here on and is exactly n uint32s, so it carries the
+    // index list with no extra allocation.
+    uint32_t* sel = tu;
+    (void)tv;
+    thrust::device_ptr<uint32_t> psel(sel);
+    auto sel_end = thrust::copy_if(
+        thrust::make_counting_iterator<uint32_t>(0),
+        thrust::make_counting_iterator<uint32_t>((uint32_t)n),
+        thrust::device_ptr<uint8_t>(dkeep), psel, KeepOn());
+    int64_t m = sel_end - psel;
     if (m <= 0) {
         *n_out = 0;
         return 1;
     }
     int bm = (int)((m + threads - 1) / threads);
     if (bm < 1) bm = 1;
-    k_pack_uvkey<<<bm, threads>>>(tu, tv, dkey, m);
-    auto vals = thrust::make_zip_iterator(thrust::make_tuple(
-        thrust::device_ptr<double>(tsm), thrust::device_ptr<int64_t>(tct)));
+    k_key_from_sel<<<bm, threads>>>(du, dv, sel, dkey, m);
     thrust::sort_by_key(
         thrust::device_ptr<unsigned long long>(dkey),
-        thrust::device_ptr<unsigned long long>(dkey) + m, vals);
+        thrust::device_ptr<unsigned long long>(dkey) + m, psel);
+    k_gather_smct<<<bm, threads>>>(dsm, dct, sel, tsm, tct, m);
+
+    // Two plain reduce_by_key passes instead of one zip pass: the segment
+    // boundaries are recomputed, but each pass is a contiguous scan over a
+    // single array. Sums are integral affinity-byte counts held exactly in a
+    // double (see k_scale_sm_bytes), so the reduction is exact either way.
+    auto keys_in = thrust::device_ptr<unsigned long long>(dkey);
+    auto keys_out = thrust::device_ptr<unsigned long long>(dkeyo);
     auto red = thrust::reduce_by_key(
-        thrust::device_ptr<unsigned long long>(dkey),
-        thrust::device_ptr<unsigned long long>(dkey) + m,
-        vals,
-        thrust::device_ptr<unsigned long long>(dkeyo),
-        thrust::make_zip_iterator(thrust::make_tuple(
-            thrust::device_ptr<double>(dsm), thrust::device_ptr<int64_t>(dct))),
-        thrust::equal_to<unsigned long long>(), SumPair());
-    int64_t m2 = red.first - thrust::device_ptr<unsigned long long>(dkeyo);
+        keys_in, keys_in + m, thrust::device_ptr<double>(tsm),
+        keys_out, thrust::device_ptr<double>(dsm));
+    int64_t m2 = red.first - keys_out;
+    thrust::reduce_by_key(
+        keys_in, keys_in + m, thrust::device_ptr<int64_t>(tct),
+        keys_out, thrust::device_ptr<int64_t>(dct));
     k_unpack_uvkey<<<(int)((m2 + threads - 1) / threads), threads>>>(dkeyo, du, dv, m2);
     *n_out = m2;
     return 1;
