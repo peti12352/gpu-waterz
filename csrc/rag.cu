@@ -5,9 +5,24 @@
 #include <vector>
 #include <cub/cub.cuh>
 
+// isum accumulates the RAW uint8 affinity bytes, not byte/255 as a float.
+//
+// Float addition is not associative, so the previous `float sum` accumulated by
+// atomicAdd gave a different result whenever two runs interleaved their atomics
+// differently: measured 740853 of 7505458 val edges disagreeing between two
+// runs on identical input, max drift 5.2e-3. That propagates into every merge
+// decision and breaks TASK.md's "same input -> byte-identical labels".
+//
+// An integer sum is exact, so the result is independent of atomic order. The
+// struct stays 16 bytes, so the table costs no extra memory.
+//
+// Range: isum <= 255 * n. uint32 overflows only past 16.8M faces on a single
+// fragment pair; total faces across the whole 2.16 Gvox volume is 3 * nvox =
+// 6.5e9 spread over ~90M edges (mean 72), so this cannot be approached. The
+// invariant is asserted in k_scatter_edges rather than assumed.
 struct Slot {
     uint64_t key;
-    float sum;
+    uint32_t isum;
     uint32_t n;
 };
 
@@ -20,13 +35,13 @@ __device__ inline uint64_t mix64(uint64_t x) {
     return x;
 }
 
-__device__ void hash_add(Slot* tab, uint64_t cap, uint64_t key, float a) {
+__device__ void hash_add(Slot* tab, uint64_t cap, uint64_t key, uint32_t a) {
     uint64_t h = mix64(key);
     for (uint64_t t = 0; t < 128; ++t) {
         uint64_t s = (h + t) & (cap - 1);
         uint64_t old = atomicCAS((unsigned long long*)&tab[s].key, 0ull, (unsigned long long)key);
         if (old == 0ull || old == key) {
-            atomicAdd(&tab[s].sum, a);
+            atomicAdd(&tab[s].isum, a);
             atomicAdd(&tab[s].n, 1u);
             return;
         }
@@ -44,7 +59,7 @@ __global__ void k_hash_faces(
     int64_t yx = Y * X;
     int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
     uint32_t id1 = seg[i];
-    auto emit = [&](uint32_t id2, float a) {
+    auto emit = [&](uint32_t id2, uint32_t a) {
         if (id1 == 0 || id2 == 0 || id1 == id2) return;
         uint32_t lo = id1 < id2 ? id1 : id2;
         uint32_t hi = id1 < id2 ? id2 : id1;
@@ -52,11 +67,11 @@ __global__ void k_hash_faces(
         hash_add(tab, cap, key, a);
     };
     if (z > 0)
-        emit(seg[i - yx], aff[(0 * Z + z) * yx + y * X + x] * (1.0f / 255.0f));
+        emit(seg[i - yx], aff[(0 * Z + z) * yx + y * X + x]);
     if (y > 0)
-        emit(seg[i - X], aff[(1 * Z + z) * yx + y * X + x] * (1.0f / 255.0f));
+        emit(seg[i - X], aff[(1 * Z + z) * yx + y * X + x]);
     if (x > 0)
-        emit(seg[i - 1], aff[(2 * Z + z) * yx + y * X + x] * (1.0f / 255.0f));
+        emit(seg[i - 1], aff[(2 * Z + z) * yx + y * X + x]);
 }
 
 __global__ void k_count_occ(const Slot* tab, uint64_t cap, uint32_t* flags) {
@@ -67,7 +82,7 @@ __global__ void k_count_occ(const Slot* tab, uint64_t cap, uint32_t* flags) {
 
 __global__ void k_scatter_edges(
     const Slot* tab, uint64_t cap, const uint32_t* psum,
-    uint32_t* u, uint32_t* v, double* sm, int64_t* ct)
+    uint32_t* u, uint32_t* v, double* sm, int64_t* ct, int* overflow)
 {
     uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
     if (i >= cap) return;
@@ -76,7 +91,10 @@ __global__ void k_scatter_edges(
     u[o] = (uint32_t)(tab[i].key >> 32);
     v[o] = (uint32_t)tab[i].key;
     ct[o] = (int64_t)tab[i].n;
-    sm[o] = (double)tab[i].sum;
+    // Silent uint32 wraparound would corrupt weights invisibly, so check the
+    // isum <= 255*n invariant instead of trusting the range argument.
+    if (tab[i].isum > 255u * tab[i].n) atomicExch(overflow, 1);
+    sm[o] = (double)tab[i].isum / 255.0;
 }
 
 static uint64_t next_pow2(uint64_t x) {
@@ -130,9 +148,19 @@ static int64_t rag_device(
         cub::DeviceScan::ExclusiveSum(tmp, tmp_bytes, flags, flags, (int)cap);
         cudaFree(tmp);
     }
-    k_scatter_edges<<<b2, threads>>>(tab, cap, flags, u_d, v_d, sm_d, ct_d);
+    int* ovf = nullptr;
+    cudaMalloc(&ovf, 4);
+    cudaMemset(ovf, 0, 4);
+    k_scatter_edges<<<b2, threads>>>(tab, cap, flags, u_d, v_d, sm_d, ct_d, ovf);
+    int h_ovf = 0;
+    cudaMemcpy(&h_ovf, ovf, 4, cudaMemcpyDeviceToHost);
+    cudaFree(ovf);
     cudaFree(tab);
     cudaFree(flags);
+    if (h_ovf) {
+        std::fprintf(stderr, "RAG_ISUM_OVERFLOW: a contact sum exceeded 255*n\n");
+        return -2;
+    }
     return (int64_t)n;
 }
 

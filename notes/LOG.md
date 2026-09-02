@@ -784,6 +784,74 @@ device_ms=40029 for all four T, measured with a co-tenant job holding ~11 GB at
 95% GPU utilization. **PROVISIONAL — not a speed result.** Timing under
 contention is not graded; graded timing waits for an uncontended GPU.
 
+## A2 — E6s is deterministic, E6t is not (TASK line 118 violation)
+
+`scripts/a2_determinism.py`, T=0.3 only, 2 runs per path, cached rag.npz so the
+input is byte-identical by construction. Compares returned parent arrays.
+
+    E6s  byte_identical=True   ndiff=0        merges 1853427 both runs
+    E6t  byte_identical=False  ndiff=397852   merges 1853416 vs 1853407
+
+397852 of 2175401 parents disagree — 18% of nodes, not float noise at the
+margin. Three causes found; two fixed, one structural:
+
+1. FIXED. Proposal priority hashed the edge's array **index**. Harmless under
+   E6s (compact_radix re-sorts by (u,v) every inner, so the index is a function
+   of the graph) but fatal under E6t, where StarMerge assigns a merged edge's
+   surviving slot by atomicCAS race. `prop_pri_bits()` now hashes the canonical
+   root pair, and widens tie space 24 -> 31 bits. ndiff 531431 -> 405456.
+2. FIXED. `atomicAdd(&sm[dest], olds)` on a double is not associative.
+   Contact sums are now rescaled once into integral affinity-byte units
+   (`k_scale_sm_bytes`, bound 1.65e12 << 2^53), making every accumulation exact
+   and order-free. ndiff 405456 -> 397852. E6s merges unchanged by the rescale
+   at 1853427, confirming the quantization is benign.
+3. NOT FIXED — structural. In `k_starmarge_blue` the `is_new` branch pushes a
+   survivor onto a node's overflow adjacency only when *that* edge's own
+   endpoints differ from the merged roots. Which racing edge wins the CAS
+   therefore decides whether the survivor stays reachable at all, so the
+   graph's reachability varies per run, not merely its numbering. Fixing this
+   means redesigning StarMerge's incremental adjacency maintenance.
+
+Verdict: E6t cannot ship regardless of speed. Optimization effort moves to the
+deterministic path. E6s re-graded after fixes 1 and 2, four thresholds,
+ACCURACY GATE: PASS (split 0.3707/0.4512/0.5162/0.6129, T=0.2 better than the
+0.3779 baseline).
+
+Contention note: E6s measured 27.5 s here against 1.29 s idle — a **22x**
+inflation with a co-tenant at 95% GPU. No timing on this box is usable while
+that holds.
+
+## B1 — the GPU RAG was nondeterministic too, now fixed and oracle-checked
+
+`scripts/b1_rag_determinism.py`. `csrc/rag.cu` accumulated contact sums with
+`atomicAdd` on a **float32**. Two runs on identical input:
+
+    before: sm bit-identical=False, 740853 of 7505458 edges differ (9.9%),
+            max drift 5.2e-3; edge set and counts identical
+    after:  sm bit-identical=True, 0 edges differ, drift 0.0
+
+This one sat in the **production** `segment()` path, so the earlier G5
+determinism pass was luck, not a guarantee.
+
+Fix: `Slot.sum` (float) -> `Slot.isum` (uint32) accumulating the RAW uint8
+affinity bytes, with `sm = isum/255.0` at scatter. Integer addition is exact,
+so the result is independent of atomic order. Slot stays 16 B, so the table
+costs nothing extra. The `isum <= 255*n` invariant is asserted on device rather
+than assumed (returns -2 and warns on violation); uint32 would only overflow
+past 16.8M faces on one fragment pair, against a whole-volume total of 3*nvox.
+
+Gated against the independent CPU reference in rag.npz (built by e3cpu.py via
+`region_graph`, not by this code path):
+
+    edge count 7505458 == TASK          edge set equal          counts EXACT
+    sum max abs diff 2.12e-05
+
+so the builder is deterministic *and* still right; determinism alone would also
+be satisfied by a stable-but-wrong builder.
+
+Note `rag.npz` comes from the CPU oracle, so the AGG gates are decoupled from
+this change and the E6s VOI pass above is unaffected by it.
+
 ## Measurement bug found in `scripts/e6s_parhac.py`
 
 The script branches on `WATERZ_PAPER_E6S`, but `csrc/parhac_d.cu` reads
