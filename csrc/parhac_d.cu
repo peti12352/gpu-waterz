@@ -1318,6 +1318,13 @@ struct P0yProf {
     int64_t* hist_nlive;
     int64_t* hist_nprop;
     int64_t* hist_nmerge;
+    // Optional. The per-node sweeps cost nnode regardless of how many roots
+    // are still live, so the live-root count is what says whether working off
+    // a list would help. Counting it costs an extra nnode sweep per inner
+    // iteration, so it is only done when this is supplied. Results are
+    // staged on the device and copied back once, to avoid adding 1800
+    // synchronizations to the loop being measured.
+    int64_t* hist_nact;
     int hist_cap;
     int hist_n;
     int skip_debug;
@@ -1403,6 +1410,12 @@ static int parhac_dev(
     EvAccum ev_d2h(prof ? &prof->d2h_ms : nullptr);
     EvAccum ev_memset(prof ? &prof->memset_ms : nullptr);
     EvAccum ev_debug(prof ? &prof->debug_ms : nullptr);
+
+    int* dnacts = nullptr;
+    if (prof && prof->hist_nact && prof->hist_cap > 0) {
+        cudaMalloc(&dnacts, (size_t)prof->hist_cap * 4);
+        cudaMemset(dnacts, 0, (size_t)prof->hist_cap * 4);
+    }
 
     for (int oi = 0; oi < n_thr; ++oi) {
         int ti = order[oi];
@@ -1506,6 +1519,8 @@ static int parhac_dev(
                         if (prof->hist_nlive) prof->hist_nlive[hi] = nlive;
                         if (prof->hist_nprop) prof->hist_nprop[hi] = nprop;
                         if (prof->hist_nmerge) prof->hist_nmerge[hi] = hm;
+                        if (dnacts) k_count_roots<<<bn, threads>>>(
+                            dparent, nnode, dnacts + hi);
                     }
                     ++ninner;
                     nmerge += hm;
@@ -1580,6 +1595,14 @@ static int parhac_dev(
             "E6r T=%.2f eps=%.4f outer=%lld inner=%lld merges=%lld nlive=%lld\n",
             T, eps, (long long)nouter, (long long)ninner, (long long)nmerge,
             (long long)nlive);
+    }
+    if (dnacts) {
+        std::vector<int> hn((size_t)prof->hist_cap);
+        cudaMemcpy(hn.data(), dnacts, (size_t)prof->hist_cap * 4,
+                   cudaMemcpyDeviceToHost);
+        for (int i = 0; i < prof->hist_n; ++i)
+            prof->hist_nact[i] = (int64_t)hn[(size_t)i];
+        cudaFree(dnacts);
     }
     cudaFree(dparent); cudaFree(dsz); cudaFree(dsz0); cudaFree(dcolor);
     cudaFree(dfrozen); cudaFree(dprop); cudaFree(dpris);
@@ -2613,7 +2636,8 @@ extern "C" int parhac_paper_d_profile(
     int64_t n_edges, const double* aff_thr, int n_thr, double eps,
     uint32_t* parent_out, uint32_t max_id, int64_t* stats_out,
     double* phase_ms, int64_t* hist_nlive, int64_t* hist_nprop,
-    int64_t* hist_nmerge, int hist_cap, int* hist_n, int skip_debug)
+    int64_t* hist_nmerge, int hist_cap, int* hist_n, int skip_debug,
+    int64_t* hist_nact)
 {
     if (n_edges <= 0 || n_thr <= 0) return 0;
     uint32_t *du, *dv;
@@ -2632,6 +2656,7 @@ extern "C" int parhac_paper_d_profile(
     prof.hist_nlive = hist_nlive;
     prof.hist_nprop = hist_nprop;
     prof.hist_nmerge = hist_nmerge;
+    prof.hist_nact = hist_nact;
     prof.hist_cap = hist_cap;
     prof.hist_n = 0;
     prof.skip_debug = skip_debug;

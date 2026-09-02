@@ -1067,3 +1067,72 @@ saving works out around 25%, which is unverifiable on a GPU at 96% contention
 Track C effort is trying to free. Output stayed bit-identical throughout, so
 this was a performance judgement and not a correctness one. Worth revisiting
 only once timings are trustworthy.
+
+## Where agglomeration time actually goes, and two hypotheses it killed
+
+Agglomeration is the biggest gap to budget, 1294 ms against 25 ms, but the GPU
+is at 96% contention so wall-clock comparisons are worthless. `scripts/
+a3_work_accounting.py` measures the loop in counts instead, which contention
+cannot distort, and `parhac_e6s_p0aa` supplies an 11-phase event split.
+
+### Track A's premise was wrong: the listing ceiling is 4x, not 50x
+
+The plan assumed the per-node sweeps waste most of their work, since every
+inner iteration sweeps all `nnode` nodes four times (`memset dprop` at 8 B per
+node, `k_pack_prop`, `k_compress`, `k_freeze`) no matter how few roots are
+live. Added optional `hist_nact` to the profiler to count live roots per
+iteration, and it does not collapse the way the premise required:
+
+    nnode 2,175,401    nact max 1,785,980  p50 428,417  min 321,973
+    node-visits done 1.60e10, useful 3.97e9  ->  ceiling 4.0x
+
+95% of iterations have fewer than half the nodes live, but none has fewer than
+a tenth: `nact` bottoms out at 321,973, about nnode/6.8. So `a-listed` and
+`a-roots` are worth at most 4x on a phase group that is not the dominant one.
+Also worth noting the outer-loop sweeps are 50.9% of all node work, so listing
+only the inner ones would address half of that 4x.
+
+My first version of this bound used `2*nlive` as the useful width, on the
+reasoning that nlive edges touch at most that many endpoints. True, but so
+loose it reported a 1.0x ceiling and would have wrongly killed Track A
+outright: most of those endpoints are repeat references to the same few roots.
+Recording the mistake because the loose bound looked like a clean negative
+result.
+
+### And the accept kernel is innocent
+
+`k_accept_serial` runs `<<<1, 1>>>`, one thread walking every proposal, which
+looked like an obvious culprit. It is not: **25 ms of 52,634**. The proposal
+count explains why. Across all 1840 inner iterations there are only 4.97e6
+proposals in total, median **zero** per iteration, so half of them accept
+nothing at all.
+
+### The real distribution
+
+    sort      14157 ms   26.9%      compress   2402 ms
+    compact    8671 ms   16.5%      propose      91 ms
+    everything else, pack/accept/freeze/color/memset/d2h, under 30 ms each
+    wall      52634 ms
+
+`sort` is two `thrust` calls per inner iteration over zip iterators, the same
+pattern already removed from `compact_radix` for being slow. But the arithmetic
+says the cost is not the sorting: 14157 ms over ~3680 calls is 3.85 ms per
+call, to sort a few thousand elements. That is not compute and it is not even
+thrust's per-call `cudaMalloc`, which runs in tens of microseconds. It is the
+**device synchronization** thrust's default policy performs on every call:
+each one waits for the co-tenant process's kernels to drain, so this phase is
+measuring the neighbour's job as much as ours.
+
+Two consequences. The 14157 ms must not be quoted as our sort cost. And the
+structural fix is right regardless of contention: CUB with temp storage
+allocated once outside the loop, no per-iteration synchronization, which also
+decouples the stage from whatever else shares the card.
+
+One latent hazard found while reading it. `k_pack_prop` stores the priority as
+`__uint_as_float` of a 31-bit hash, and the sort then compares those bit
+patterns *as floats*. Patterns in 0x7f800000-0x7fffffff are inf or NaN, and NaN
+comparisons are false, so the order among them is undefined. A2 measured E6s
+deterministic in practice, so this is not an active bug, but the priority is an
+integer hash and should be sorted as one. Doing that changes the tie order and
+therefore the output, so it needs a VOI re-grade rather than a bit-equality
+check.

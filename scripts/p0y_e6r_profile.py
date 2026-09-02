@@ -32,6 +32,7 @@ def _bind(lib):
         ctypes.POINTER(ctypes.c_int64), ctypes.POINTER(ctypes.c_int64),
         ctypes.POINTER(ctypes.c_int64), ctypes.c_int,
         ctypes.POINTER(ctypes.c_int), ctypes.c_int,
+        ctypes.POINTER(ctypes.c_int64),
     ]
 
 
@@ -63,6 +64,7 @@ def _run(lib, u, v, sm, ct, thrs, max_id, skip_debug):
         ctypes.c_int(HIST_CAP),
         ctypes.byref(hist_n),
         ctypes.c_int(1 if skip_debug else 0),
+        None,  # hist_nact: not needed here, and it costs an extra sweep
     )
     wall_ms = (time.perf_counter() - t0) * 1000.0
     n = int(hist_n.value)
