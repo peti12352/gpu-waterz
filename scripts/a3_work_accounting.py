@@ -146,10 +146,45 @@ def main():
         f"memset={phase[4]:.1f} (contended, ratios only)",
         flush=True,
     )
+    # Ledger for the three per-iteration passes A3 removed. All three were
+    # bandwidth, not algorithm, and none of them can be measured on a shared
+    # card -- so account for them in bytes, from the per-iteration nlive the
+    # profile already records, rather than from a stopwatch.
+    #
+    #   copyback   hash_combine_live copied its four emitted arrays back over
+    #              the input: (4+4+8+8) B read plus the same written per edge.
+    #   hashclear  k_hash_clear stored a 24-byte HSlot over the whole table,
+    #              sized next_pow2(2*nlive + 1024) each iteration.
+    #   dpropclear cudaMemset over prop, 8 B per node, every iteration.
+    def next_pow2(x):
+        p = 1024
+        while p < x:
+            p <<= 1
+        return p
+
+    GB = 1 << 30
+    copyback_gb = float(48 * nlive.sum()) / GB
+    tab_slots = np.array([next_pow2(2 * int(k) + 1024) for k in nlive],
+                         dtype=np.float64)
+    hashclear_gb = float(24 * tab_slots.sum()) / GB
+    dpropclear_gb = memset_gb
+    removed_gb = copyback_gb + hashclear_gb + dpropclear_gb
+    print(
+        f"A3 traffic removed: copyback={copyback_gb:.1f} GB "
+        f"hashclear={hashclear_gb:.1f} GB dpropclear={dpropclear_gb:.1f} GB "
+        f"total={removed_gb:.1f} GB",
+        flush=True,
+    )
     out = {
         "nnode": int(nnode),
         "nedge": int(len(u)),
         "threshold": THR,
+        "traffic_removed_gb": {
+            "copyback": copyback_gb,
+            "hashclear": hashclear_gb,
+            "dpropclear": dpropclear_gb,
+            "total": removed_gb,
+        },
         "inner_iters": n,
         "hist_truncated": bool(truncated),
         "outers": nouter,

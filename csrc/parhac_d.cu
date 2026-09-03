@@ -404,14 +404,23 @@ __global__ void k_pack_prop(
 // integer it is has a defined total order. It is a different tie order, so
 // this changes which merges happen and has to be re-graded on VOI rather than
 // checked for bit-equality.
+// Collects the winning proposals, and clears the proposal array behind it.
+//
+// The loop used to cudaMemset prop over all nnode before every propose: 8 bytes
+// per node, 17.4 MB per inner iteration at val, ~24 GB across a threshold. This
+// pass already reads every entry, so resetting the non-empty ones costs a store
+// on those alone -- the same trade k_hash_emit makes with the hash table.
+// Entries are only ever written by an atomicMax from zero, so an entry that is
+// zero here was never touched and needs no reset.
 __global__ void k_pack_prop_fused(
-    const unsigned long long* prop, const uint32_t* sz, int nnode,
+    unsigned long long* prop, const uint32_t* sz, int nnode,
     unsigned long long* key, unsigned long long* pay, int* nprop)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i <= 0 || i >= nnode) return;
     unsigned long long p = prop[i];
     if (p == 0) return;
+    prop[i] = 0;
     uint32_t r = (uint32_t)(p & 0xffffffffull);
     if (r == 0) return;
     unsigned pri = (unsigned)(p >> 32) & 0x7fffffffu;
@@ -1223,18 +1232,37 @@ __global__ void k_hash_count(const HSlot* tab, int ntab, int* nout)
     if (tab[i].key != 0 && tab[i].ct > 0) atomicAdd(nout, 1);
 }
 
+// Emits the combined edges and leaves the table empty behind it.
+//
+// The caller used to run k_hash_clear over the whole table before every insert
+// pass: a 24-byte store on roughly 2.7 slots per live edge, every inner
+// iteration, which is about 65 B/edge of write traffic on a phase that is
+// bandwidth-bound. This pass already has to read every slot, so emptying the
+// occupied ones here replaces that with a store on the occupied slots alone.
+//
+// The invariant it maintains: k_hash_insert only writes a slot after a CAS that
+// set its key, so key == 0 implies sm and ct are untouched zeros. Zeroing every
+// slot whose key is set therefore leaves the whole table clean, including the
+// tail above a later, smaller ntab_use.
 __global__ void k_hash_emit(
-    const HSlot* tab, int ntab, uint32_t* u, uint32_t* v, double* sm, int64_t* ct,
+    HSlot* tab, int ntab, uint32_t* u, uint32_t* v, double* sm, int64_t* ct,
     int* nout)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= ntab) return;
-    if (tab[i].key == 0 || tab[i].ct == 0) return;
+    const unsigned long long key = tab[i].key;
+    if (key == 0) return;
+    const double s = tab[i].sm;
+    const unsigned long long c = tab[i].ct;
+    tab[i].key = 0;
+    tab[i].sm = 0;
+    tab[i].ct = 0;
+    if (c == 0) return;
     int slot = atomicAdd(nout, 1);
-    u[slot] = (uint32_t)(tab[i].key >> 32);
-    v[slot] = (uint32_t)(tab[i].key & 0xffffffffull);
-    sm[slot] = tab[i].sm;
-    ct[slot] = (int64_t)tab[i].ct;
+    u[slot] = (uint32_t)(key >> 32);
+    v[slot] = (uint32_t)(key & 0xffffffffull);
+    sm[slot] = s;
+    ct[slot] = (int64_t)c;
 }
 
 __global__ void k_freeze(uint32_t* parent, uint32_t* sz, const uint32_t* sz0,
@@ -1314,11 +1342,13 @@ static int next_pow2(int x);
 // claims output slots with an atomic. That is only safe because propose picks
 // per node by atomicMax on a content-derived priority, so it does not depend
 // on edge position. That argument is tested by A2, not trusted.
+// The edge pointers are taken by reference so the combined result can be
+// adopted by swapping buffers rather than copied back over the input.
 static int hash_combine_live(
-    uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
+    uint32_t*& du, uint32_t*& dv, double*& dsm, int64_t*& dct, uint8_t* dkeep,
     uint32_t* dparent, int nnode, int64_t n, int64_t* n_out,
     int be, int threads,
-    uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
+    uint32_t*& tu, uint32_t*& tv, double*& tsm, int64_t*& tct,
     HSlot* dtab, int ntab, int* dnout, int* dovf, bool recompress = true)
 {
     int bn = (nnode + threads - 1) / threads;
@@ -1333,7 +1363,8 @@ static int hash_combine_live(
     int ntab_use = next_pow2((int)(n * 2 + 1024));
     if (ntab_use > ntab) ntab_use = ntab;
     int tb = (ntab_use + threads - 1) / threads;
-    k_hash_clear<<<tb, threads>>>(dtab, ntab_use);
+    // No clear pass: k_hash_emit leaves the table empty, and the caller clears
+    // it once after allocation.
     k_hash_insert<<<be, threads>>>(
         du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf);
     cudaMemset(dnout, 0, 4);
@@ -1344,10 +1375,15 @@ static int hash_combine_live(
         *n_out = 0;
         return 1;
     }
-    cudaMemcpy(du, tu, (size_t)m * 4, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dv, tv, (size_t)m * 4, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dsm, tsm, (size_t)m * 8, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dct, tct, (size_t)m * 8, cudaMemcpyDeviceToDevice);
+    // The emitted arrays are already the complete compacted edge list, so
+    // copying them back over the input was 48 B/edge of pure movement on every
+    // inner iteration. Swapping which buffer is "live" is the same result and
+    // costs nothing. Only the first m entries are ever read, so what the two
+    // buffers hold past m does not matter.
+    std::swap(du, tu);
+    std::swap(dv, tv);
+    std::swap(dsm, tsm);
+    std::swap(dct, tct);
     *n_out = m;
     return 1;
 }
@@ -1972,6 +2008,23 @@ static int parhac_e6s_dev(
     cudaMalloc(&cct, (size_t)n_edges * 8);
     cudaMalloc(&dtab, (size_t)ntab * sizeof(HSlot));
     cudaMalloc(&dnout, 4);
+    // Both of these are cleared once here rather than once per inner
+    // iteration: k_hash_emit and k_pack_prop_fused each reset the entries they
+    // consume, so both arrive empty.
+    {
+        int tb0 = (ntab + 255) / 256;
+        k_hash_clear<<<tb0, 256>>>(dtab, ntab);
+    }
+    cudaMemset(dprop, 0, (size_t)nnode * 8);
+    // hash_combine_live adopts its output by swapping du/dv/dsm/dct with
+    // tu/tv/tsm/tct, so after an odd number of compactions the t* names hold
+    // the caller's arrays and the d* names hold these allocations. Remember
+    // what was allocated here and free that, or the swap turns into a free of
+    // memory this function does not own.
+    uint32_t* alloc_tu = tu;
+    uint32_t* alloc_tv = tv;
+    double* alloc_tsm = tsm;
+    int64_t* alloc_tct = tct;
     unsigned long long *dkey, *dkeyo;
     cudaMalloc(&dkey, (size_t)n_edges * 8);
     cudaMalloc(&dkeyo, (size_t)n_edges * 8);
@@ -2066,7 +2119,8 @@ static int parhac_e6s_dev(
                 ev_color.stop();
                 for (int inner = 0; inner < 64; ++inner) {
                     ev_memset.start();
-                    cudaMemset(dprop, 0, (size_t)nnode * 8);
+                    // dprop is not cleared here: k_pack_prop_fused resets the
+                    // entries it consumes, so it arrives empty.
                     cudaMemset(dnmerge, 0, 4);
                     cudaMemset(dnprop, 0, 8);
                     if (zprof) cudaMemset(ddbg, 0, 20);
@@ -2246,7 +2300,9 @@ static int parhac_e6s_dev(
     compact_scratch_free(csr);
     cudaFree(dreds); cudaFree(dblues); cudaFree(dadd);
     cudaFree(dnmerge); cudaFree(dnprop); cudaFree(dkeep);
-    cudaFree(tu); cudaFree(tv); cudaFree(tsm); cudaFree(tct); cudaFree(dblk);
+    // The allocations, not the current values of the names; see alloc_t* above.
+    cudaFree(alloc_tu); cudaFree(alloc_tv);
+    cudaFree(alloc_tsm); cudaFree(alloc_tct); cudaFree(dblk);
     cudaFree(dtab); cudaFree(dnout); cudaFree(dkey); cudaFree(dkeyo);
     cudaFree(cu); cudaFree(cv); cudaFree(csm); cudaFree(cct);
     if (zprof) {

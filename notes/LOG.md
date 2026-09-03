@@ -1706,3 +1706,76 @@ Gated: `edge_set_equal=True` and `count_exact=True` against the CPU oracle,
 `ct_bit_identical=True`, `sm_bit_identical=True`, `max_abs_drift=0.000e+00`,
 `nedge` 7505458 as required. Watershed re-gated after the shared header moved:
 C2 PASS, `ndiff=[0]`, oracle `array_equal=True`.
+
+## A3 — the compaction was bandwidth, not hashing
+
+I went into A3 expecting to need a dirty-set index, because A2 said 97.6% of
+edge visits are on edges that cannot merge. Reading what the compaction actually
+does first turned out to matter more than that ratio. Per inner iteration
+`hash_combine_live` ran:
+
+    k_rewrite        over n edges
+    k_hash_clear     over next_pow2(2n + 1024) slots, 24 B stored on each
+    k_hash_insert    over n edges
+    k_hash_emit      over the same slots, 24 B read on each
+    4x cudaMemcpy    D2D, copying the emitted arrays back over the input
+
+The table is sized at ~2.7 slots per live edge, so clear and emit together move
+about 130 B per edge, and the copy-back another 48 B, against roughly 24 B of
+actual edge payload. The phase was not waiting on random hash access at all; it
+was moving bytes that did not need to move. Three of them do not need to exist:
+
+**The copy-back.** The emitted arrays *are* the compacted edge list. Swapping
+which buffer is live is the same result for free. The one trap is ownership:
+after an odd number of compactions the `t*` names hold the caller's arrays and
+the `d*` names hold this function's, so the teardown has to free the
+allocations rather than whatever the names ended up pointing at.
+
+**The clear pass.** `k_hash_emit` already reads every slot. `k_hash_insert`
+only writes a slot after a CAS that set its key, so a slot with key 0 has
+untouched zeros in `sm` and `ct` -- which means emit can zero the slots it finds
+occupied and leave the whole table clean, including the tail above a later,
+smaller `ntab_use`. The separate clear becomes one clear after allocation.
+
+**The proposal array.** Same trade: `k_pack_prop_fused` reads every entry of
+`prop`, and entries are only ever written by an `atomicMax` up from zero, so it
+can reset the ones it consumes instead of a `cudaMemset` over all `nnode` every
+iteration. (`prop[0]` is never written, since `k_propose` requires both roots
+nonzero, so the one entry the pack kernel skips stays clean from the initial
+memset.)
+
+Traffic removed, from the per-iteration `nlive` the profiler already records
+(scripts/a3_work_accounting.py):
+
+    copyback     120.3 GiB    exact, 48 B x sum(nlive) = 2.691e9
+    dpropclear    22.8 GiB    exact, 8 B x 2175401 nodes x 1405 iterations
+    hashclear    ~165   GiB    scaled from the profiled slot distribution
+    total        ~308   GiB
+
+### What I could not measure
+
+Nothing, in wall clock. The co-tenant held the card at 99% for this whole
+stretch, and successive runs of the identical binary came out at 19770, 22249
+and 22352 ms. Worse, the `memset` phase counter jumped from 16 ms to 1375 ms
+*after* I deleted its largest memset - under that much contention whichever
+operation sits at a scheduling boundary absorbs the queue wait, so the phase
+labels stop meaning anything. `compact` did read 3113 -> 1569 ms, but I do not
+trust the sign of any of it. The bytes above are the claim; the stopwatch is
+deferred to an idle window.
+
+Gated: `merges=1853427`, `nlive=898197`, `inner=1405`, `outer=653`, every one
+identical to the A1 baseline. A2 `byte_identical=True ndiff=[0]`. ACCURACY GATE
+PASS at all four thresholds with the fingerprint unchanged at
+`[294164, 321999, 345130, 379292]`.
+
+### One mistake worth recording
+
+The first attempt came back with `merges=389420` instead of 1853427. I bisected
+it twice and both bisects said "still broken", which was uninformative because
+the modified `k_hash_emit` was live in every arm - I had removed the
+clear-skipping but not the zeroing, so I never actually tested a control.
+Reading `git diff` found it in seconds: my edit to insert the one-time table
+clear had matched a two-line block and dropped `cudaMalloc(&dnout, 4)` from the
+replacement. `dnout` was an uninitialised pointer, so the emitted-edge count was
+garbage and the compaction reported an empty graph. Read the diff before
+bisecting.
