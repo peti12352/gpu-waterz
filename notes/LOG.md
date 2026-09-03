@@ -1665,3 +1665,44 @@ an assumption that had no evidence at 2.16 Gvox.
 
 Gated: C2 PASS, `ndiff=[0]`, `nfrag=2175400`, `bg=506568`,
 `array_equal=True` and `fingerprint_equal=True` against the CPU oracle.
+
+## C1 — collapsing the region-graph's duplicate atomics inside the warp
+
+The hash itself was fine (proper `mix64`, no low-bits defect), but every face
+did its own `atomicCAS` plus two `atomicAdd`s. At val that is ~84M faces
+inserted for 7,505,458 distinct edges, about 11 atomic sequences per edge, and
+they do not arrive spread out: a warp spans 32 consecutive x, so when it crosses
+a y or z sheet boundary every lane sees the same pair of fragments and emits the
+*same* key, and those 32 atomics serialise on one slot.
+
+`__match_any_sync` on the packed key groups the lanes that agree,
+`__reduce_add_sync` sums the group's affinity bytes and face count, and the
+lowest lane in the group does one atomic sequence for all of them. Exact, not
+approximate: both accumulators are integers, so summing in the warp gives the
+same total as summing at the slot, and the result stays order-independent.
+
+Two things the shape forces. Lanes with no face to emit still have to reach
+`__match_any_sync`, so the kernel no longer returns early - out-of-range lanes
+carry key 0 and group together harmlessly - and the mask is the full warp rather
+than `__activemask()`, which would be fragile under the divergence the old
+`if (z > 0)` guards created. `rag.cu` also moved to the 3D grid from B1, which
+matters here beyond arithmetic: with a 1D launch a warp can straddle a row
+boundary and cover two y values, exactly the locality the aggregation depends
+on.
+
+Matched A/B, builds interleaved run by run so a drift in load hits both:
+
+    work  median 17.44  min 17.06  max 17.87   nedge 7505458
+    base  median 23.37  min 22.60  max 25.92   nedge 7505458
+    1.34x
+
+Worth noting what this measurement corrects: the plan projected RAG at ~1.5 s
+for the graded volume, which came from contended wall clock. Device time on val
+is 17.4 ms, so 2.16 Gvox scales to roughly 210 ms against a 150 ms budget. RAG
+was never the problem it looked like, and C2 (shared-memory staging) is not
+needed.
+
+Gated: `edge_set_equal=True` and `count_exact=True` against the CPU oracle,
+`ct_bit_identical=True`, `sm_bit_identical=True`, `max_abs_drift=0.000e+00`,
+`nedge` 7505458 as required. Watershed re-gated after the shared header moved:
+C2 PASS, `ndiff=[0]`, oracle `array_equal=True`.

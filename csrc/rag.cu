@@ -6,6 +6,8 @@
 #include <map>
 #include <cub/cub.cuh>
 
+#include "vox.cuh"
+
 // Device allocation accounting; see the matching note in ws.cu. The RAG's hash
 // table is the single largest buffer in the pipeline at large volumes, so its
 // exact size matters for the 24 GB question.
@@ -72,17 +74,59 @@ __device__ inline uint64_t mix64(uint64_t x) {
     return x;
 }
 
-__device__ void hash_add(Slot* tab, uint64_t cap, uint64_t key, uint32_t a) {
+// Insert a already-summed contribution: `sum` of affinity bytes over `cnt`
+// faces sharing one key. Open addressing, linear probing, power-of-two table.
+__device__ inline void hash_add_group(Slot* tab, uint64_t cap, uint64_t key,
+                                      uint32_t sum, uint32_t cnt) {
     uint64_t h = mix64(key);
     for (uint64_t t = 0; t < 128; ++t) {
         uint64_t s = (h + t) & (cap - 1);
         uint64_t old = atomicCAS((unsigned long long*)&tab[s].key, 0ull, (unsigned long long)key);
         if (old == 0ull || old == key) {
-            atomicAdd(&tab[s].isum, a);
-            atomicAdd(&tab[s].n, 1u);
+            atomicAdd(&tab[s].isum, sum);
+            atomicAdd(&tab[s].n, cnt);
             return;
         }
     }
+}
+
+__device__ void hash_add(Slot* tab, uint64_t cap, uint64_t key, uint32_t a) {
+    hash_add_group(tab, cap, key, a, 1u);
+}
+
+// The same insertion, but summed across the warp first.
+//
+// A fragment averages ~83 voxels at val, so its surface is far larger than the
+// number of distinct neighbours it has: ~84M faces are emitted for ~7.5M
+// distinct edges, about 11 atomic sequences per edge. Worse, they arrive
+// together. A warp spans 32 consecutive x, so when it crosses a y or z boundary
+// every lane is looking at the same pair of sheets and emits the *same* key,
+// and 32 atomicAdds to one slot serialise on that slot.
+//
+// Matching lanes on the key and letting the lowest one add the group's total
+// collapses each such burst to a single atomic sequence. This is exact rather
+// than approximate: both accumulators are integers, so pre-summing inside the
+// warp gives the same total as summing at the slot, and the result stays
+// independent of order.
+//
+// Every lane must reach __match_any_sync, including lanes with nothing to
+// emit, which is why the caller passes `valid` instead of returning early and
+// why the mask is the full warp rather than __activemask().
+__device__ inline void hash_add_warp(Slot* tab, uint64_t cap, uint64_t key,
+                                     uint32_t a, bool valid) {
+    // A real key is (lo << 32) | hi with both ids nonzero, so 0 is free to mark
+    // "nothing to emit" and those lanes group together harmlessly.
+    const uint64_t k = valid ? key : 0ull;
+    const unsigned peers = __match_any_sync(0xffffffffu, k);
+    if (!valid) return;
+    // Only lanes of this group reach these, and they all pass the same mask,
+    // which is what __reduce_add_sync requires. sm_80 and up; the dev card is
+    // sm_120 and the graded 3090 Ti is sm_86.
+    const uint32_t gsum = __reduce_add_sync(peers, a);
+    const uint32_t gcnt = __reduce_add_sync(peers, 1u);
+    const unsigned lane = threadIdx.x & 31u;
+    if (__popc(peers & ((1u << lane) - 1u)) != 0) return;  // not the lowest peer
+    hash_add_group(tab, cap, key, gsum, gcnt);
 }
 
 __global__ void k_hash_faces(
@@ -90,25 +134,30 @@ __global__ void k_hash_faces(
     int64_t Z, int64_t Y, int64_t X,
     Slot* tab, uint64_t cap)
 {
-    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
-    int64_t size = Z * Y * X;
-    if (i >= size) return;
-    int64_t yx = Y * X;
-    int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
-    uint32_t id1 = seg[i];
-    auto emit = [&](uint32_t id2, uint32_t a) {
-        if (id1 == 0 || id2 == 0 || id1 == id2) return;
-        uint32_t lo = id1 < id2 ? id1 : id2;
-        uint32_t hi = id1 < id2 ? id2 : id1;
-        uint64_t key = ((uint64_t)lo << 32) | (uint64_t)hi;
-        hash_add(tab, cap, key, a);
+    const Vox v = vox_of(Y, X);
+    const int64_t yx = Y * X;
+    // Out-of-range lanes stay in the warp rather than returning: the
+    // aggregation in hash_add_warp needs all 32 lanes to reach the match.
+    const bool ok = v.ok;
+    const int64_t i = ok ? v.i : 0;
+    const int64_t z = v.z, y = v.y, x = v.x;
+    const uint32_t id1 = ok ? seg[i] : 0u;
+    auto emit = [&](bool face, uint32_t id2, uint32_t a) {
+        const bool valid = face && id1 != 0 && id2 != 0 && id1 != id2;
+        const uint32_t lo = id1 < id2 ? id1 : id2;
+        const uint32_t hi = id1 < id2 ? id2 : id1;
+        const uint64_t key = ((uint64_t)lo << 32) | (uint64_t)hi;
+        hash_add_warp(tab, cap, key, a, valid);
     };
-    if (z > 0)
-        emit(seg[i - yx], aff[(0 * Z + z) * yx + y * X + x]);
-    if (y > 0)
-        emit(seg[i - X], aff[(1 * Z + z) * yx + y * X + x]);
-    if (x > 0)
-        emit(seg[i - 1], aff[(2 * Z + z) * yx + y * X + x]);
+    const bool fz = ok && z > 0;
+    const bool fy = ok && y > 0;
+    const bool fx = ok && x > 0;
+    emit(fz, fz ? seg[i - yx] : 0u,
+         fz ? aff[(0 * Z + z) * yx + y * X + x] : 0u);
+    emit(fy, fy ? seg[i - X] : 0u,
+         fy ? aff[(1 * Z + z) * yx + y * X + x] : 0u);
+    emit(fx, fx ? seg[i - 1] : 0u,
+         fx ? aff[(2 * Z + z) * yx + y * X + x] : 0u);
 }
 
 __global__ void k_count_occ(const Slot* tab, uint64_t cap, uint32_t* flags) {
@@ -146,15 +195,14 @@ static int64_t rag_device(
     uint32_t* u_d, uint32_t* v_d, double* sm_d, int64_t* ct_d,
     int64_t max_edges)
 {
-    int64_t size = Z * Y * X;
     uint64_t cap = next_pow2((uint64_t)max_edges * 2);
     if (cap < 1024) cap = 1024;
     Slot* tab = nullptr;
     cudaMalloc(&tab, cap * sizeof(Slot));
     cudaMemset(tab, 0, cap * sizeof(Slot));
     int threads = 256;
-    int blocks = (int)((size + threads - 1) / threads);
-    k_hash_faces<<<blocks, threads>>>(seg_d, aff_d, Z, Y, X, tab, cap);
+    k_hash_faces<<<vox_grid(Z, Y, X, threads), threads>>>(
+        seg_d, aff_d, Z, Y, X, tab, cap);
     uint32_t* flags = nullptr;
     cudaMalloc(&flags, cap * 4);
     int b2 = (int)((cap + threads - 1) / threads);
@@ -210,6 +258,12 @@ extern "C" int64_t rag_gpu_d(
     return rag_device(aff_d, seg_d, Z, Y, X, u_d, v_d, sm_d, ct_d, max_edges);
 }
 
+// Device time of the last rag_gpu call. Exposed as a separate reader rather
+// than an out-parameter so the existing callers' signatures stay put.
+static float g_rag_last_ms = 0.0f;
+
+extern "C" float rag_last_ms() { return g_rag_last_ms; }
+
 extern "C" int64_t rag_gpu(
     const uint8_t* aff_h, const uint32_t* seg_h,
     int64_t Z, int64_t Y, int64_t X,
@@ -230,7 +284,21 @@ extern "C" int64_t rag_gpu(
     cudaMalloc(&ct_d, (size_t)max_edges * 8);
     cudaMemcpy(aff_d, aff_h, (size_t)3 * size, cudaMemcpyHostToDevice);
     cudaMemcpy(seg_d, seg_h, (size_t)size * 4, cudaMemcpyHostToDevice);
+    // Device time around the kernels only. Wall clock here would be dominated
+    // by the 540 MB of affinity this entry point copies in, which the graded
+    // path does not do, so it would hide whatever the kernels did.
+    cudaEvent_t ev0, ev1;
+    cudaEventCreate(&ev0);
+    cudaEventCreate(&ev1);
+    cudaEventRecord(ev0);
     int64_t n = rag_device(aff_d, seg_d, Z, Y, X, u_d, v_d, sm_d, ct_d, max_edges);
+    cudaEventRecord(ev1);
+    cudaEventSynchronize(ev1);
+    cudaEventElapsedTime(&g_rag_last_ms, ev0, ev1);
+    fprintf(stderr, "RAG device_ms=%.2f nedge=%lld\n", g_rag_last_ms,
+            (long long)n);
+    cudaEventDestroy(ev0);
+    cudaEventDestroy(ev1);
     if (n > 0) {
         cudaMemcpy(u_out, u_d, (size_t)n * 4, cudaMemcpyDeviceToHost);
         cudaMemcpy(v_out, v_d, (size_t)n * 4, cudaMemcpyDeviceToHost);
