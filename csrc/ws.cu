@@ -1568,7 +1568,12 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     return 0;
 }
 
-__global__ void k_hook_remain(const uint8_t* bits, uint32_t* parent, int64_t Z, int64_t Y, int64_t X) {
+// changed lets the basin union-find stop when it has converged instead of
+// running a round count fixed on the host. Same shape as k_hook_bidir's flag:
+// one atomicExch on a single word per changed round, immaterial next to the
+// full-volume sweep around it.
+__global__ void k_hook_remain(const uint8_t* bits, uint32_t* parent, int* changed,
+                              int64_t Z, int64_t Y, int64_t X) {
     const Vox v = vox_of(Y, X);
     if (!v.ok) return;
     const int64_t i = v.i, z = v.z, y = v.y, x = v.x;
@@ -1581,8 +1586,10 @@ __global__ void k_hook_remain(const uint8_t* bits, uint32_t* parent, int64_t Z, 
         int64_t j = neigh_i(i, d, Y, X);
         uint32_t pj = parent[j];
         if (pi == pj) continue;
-        if (pi < pj) atomicMin(&parent[pj], pi);
-        else atomicMin(&parent[pi], pj);
+        uint32_t lo = pi < pj ? pi : pj;
+        uint32_t old = (pi < pj) ? atomicMin(&parent[pj], pi)
+                                 : atomicMin(&parent[pi], pj);
+        if (changed && old > lo) atomicExch(changed, 1);
     }
 }
 
@@ -1619,13 +1626,35 @@ static int e9c_basins_d(const uint8_t* bits_d, uint32_t* seg_d, int64_t Z, int64
     cudaMalloc(&flag, (size_t)size * 4);
     cudaMalloc(&psum, (size_t)size * 4);
     k_parent_init<<<blocks, threads>>>(parent, size);
-    int nsv = g_sv_rounds;
-    if (nsv < 1) nsv = 1;
-    if (nsv > 40) nsv = 40;
-    for (int r = 0; r < nsv; ++r) {
-        k_hook_remain<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, parent, Z, Y, X);
-        k_uf_compress<<<blocks, threads>>>(parent, size);
+    // This ran a host-fixed round count -- `ws_set_sv_rounds(7)`, tuned on the
+    // 180 Mvox validation volume. That is the wrong shape twice over. Spare
+    // rounds are full-volume sweeps, and worse, a volume needing more than the
+    // tuned count would come out with basins still unmerged and no complaint:
+    // wrong fragments, not a slow run. The graded volume is 12x larger and has
+    // never been executed, so the count cannot be assumed to carry.
+    //
+    // Run to convergence instead, as the plateau union-find already does, and
+    // report failure to converge rather than absorbing it. g_sv_rounds stays as
+    // the safety bound so an explicit setting still caps the work.
+    int uf_cap = g_sv_rounds;
+    if (uf_cap < 1) uf_cap = 1;
+    if (uf_cap > 64) uf_cap = 64;
+    int* sv_changed = nullptr;
+    cudaMalloc(&sv_changed, 4);
+    int sv_rounds = 0;
+    for (int r = 0; r < uf_cap; ++r) {
+        cudaMemset(sv_changed, 0, 4);
+        k_hook_remain<<<vox_grid(Z, Y, X, threads), threads>>>(
+            bits_d, parent, sv_changed, Z, Y, X);
+        k_uf_compress_c<<<blocks, threads>>>(parent, sv_changed, size);
+        int h = 0;
+        cudaMemcpy(&h, sv_changed, 4, cudaMemcpyDeviceToHost);
+        ++sv_rounds;
+        if (!h) break;
     }
+    cudaFree(sv_changed);
+    fprintf(stderr, "E9c sv_rounds=%d/%d%s\n", sv_rounds, uf_cap,
+            sv_rounds >= uf_cap ? " NOT-CONVERGED" : "");
     k_root_flag<<<blocks, threads>>>(bits_d, parent, flag, size);
     {
         void* tmp = nullptr;
@@ -1826,7 +1855,8 @@ extern "C" int p0_ws_diag(
     int first_zero = -1;
     for (int r = 0; r < 40; ++r) {
         cudaMemcpy(prev, parent, (size_t)size * 4, cudaMemcpyDeviceToDevice);
-        k_hook_remain<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, parent, Z, Y, X);
+        k_hook_remain<<<vox_grid(Z, Y, X, threads), threads>>>(
+            bits_d, parent, nullptr, Z, Y, X);
         k_uf_compress<<<blocks, threads>>>(parent, size);
         cudaMemset(dchg, 0, 8);
         k_count_diff<<<blocks, threads>>>(prev, parent, size, dchg);

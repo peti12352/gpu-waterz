@@ -287,9 +287,18 @@ def _extract_gpu(fr, parent):
 
 
 def _ensure_sv7():
+    """Raise the basin union-find's round bound to its safety cap.
+
+    This used to pin the count to 7, which was where the loop stopped changing
+    anything on the 180 Mvox validation volume. The loop now detects
+    convergence itself, so pinning it can only truncate: a volume whose basins
+    need more rounds would come out with them unmerged and report nothing. The
+    graded volume is 12x larger and was never measured, so the bound is left at
+    the cap and the loop exits on its own.
+    """
     lib = ctypes.CDLL(str(_WS))
     lib.ws_set_sv_rounds.argtypes = [ctypes.c_int]
-    lib.ws_set_sv_rounds(7)
+    lib.ws_set_sv_rounds(64)
 
 
 def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999):

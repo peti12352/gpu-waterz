@@ -1634,3 +1634,34 @@ threads are reading them, so how many rounds it takes to reach the fixed point
 depends on the interleaving. The fixed point itself is unique - it is the
 min-index connected-component labelling - so the result cannot vary, and
 `ndiff=0` across runs is the evidence.
+
+## B2 — the basin union-find was trusting a count tuned on the small volume
+
+`e9c_basins_d` ran a host-fixed number of rounds:
+
+    int nsv = g_sv_rounds;              // ws_set_sv_rounds(7) from segment.py
+    for (int r = 0; r < nsv; ++r) {
+        k_hook_remain<<<...>>>(bits_d, parent, Z, Y, X);
+        k_uf_compress<<<...>>>(parent, size);
+    }
+
+7 was measured on the 180 Mvox validation volume. The failure mode this creates
+is worse than a slow run: a volume whose basins need an eighth round finishes
+with them unmerged, produces the wrong fragments, and says nothing about it.
+The graded volume is 12x larger and has never been executed, so nothing
+justified carrying the count over.
+
+Now converge-driven, same flag pattern the plateau union-find already used, and
+`NOT-CONVERGED` printed if it ever hits the bound. `_ensure_sv7` sets the bound
+to the safety cap rather than pinning the count, since pinning can now only
+truncate.
+
+    E9c sv_rounds=7/40
+
+So val does converge at exactly 7 and the original tuning was right, sitting
+precisely on the boundary. Work is unchanged on val - the 7th round is the one
+that observes nothing changed - so this is not a speedup, it is the removal of
+an assumption that had no evidence at 2.16 Gvox.
+
+Gated: C2 PASS, `ndiff=[0]`, `nfrag=2175400`, `bg=506568`,
+`array_equal=True` and `fingerprint_equal=True` against the CPU oracle.
