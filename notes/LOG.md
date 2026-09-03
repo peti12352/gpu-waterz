@@ -1779,3 +1779,60 @@ clear had matched a two-line block and dropped `cudaMalloc(&dnout, 4)` from the
 replacement. `dnout` was an uninitialised pointer, so the emitted-edge count was
 garbage and the compaction reported an empty graph. Read the diff before
 bisecting.
+
+## B3 — measured the premise before building on it, and it did not hold
+
+B1 left a clean diagnosis: `k_uf_compress_c` is 64% of the plateau union-find
+(comp 317 ms of 499 ms) while moving about 2 GB, so it runs ~30x off bandwidth
+roofline and the cost is dependent random access rather than bytes. The planned
+fix was shared-memory tile labelling, on the theory that the expense is walking
+parent chains through global memory.
+
+One thing makes any replacement tractable here: what the gate pins is the
+*fixed point*, not the trajectory. The loop settles when neither hooking nor
+flattening changes anything, and that state is exactly "every entry holds its
+component's minimum index" regardless of how it got there. So the flattening
+kernel can be swapped outright.
+
+The cheapest test of the chain-walking theory is pointer jumping, `p[i] <-
+p[p[i]]`: two loads and at most one store per thread, halving every chain, no
+walking. Added behind `WATERZ_UF_ALGO` and run interleaved, twice each:
+
+    algo 0  uf_find compression   rounds 7  comp 320.2 321.4 322.0 322.4  uf ~507
+    algo 1  pointer jumping       rounds 9  comp 428.8 424.6 435.6 434.0  uf ~637
+
+Both bit-identical: `nfrag=2175400`, `bg=506568`, `array_equal=True` against the
+CPU oracle in every run, which is the fixed-point argument confirmed
+empirically. Jumping is 1.26x *slower*.
+
+The per-round figures are what matter:
+
+    algo 0   320.2 / 7 = 45.7 ms per round
+    algo 1   428.8 / 9 = 47.6 ms per round
+
+Within 4%. Two kernels doing very different amounts of chain work cost the same
+per round, which says the chains are already short - mostly one or two hops -
+and the round is paid for by the *single* random gather `p[a]` that both do, one
+per voxel over a 720 MB array. Chain length was never the cost. Round count is,
+and `uf_find` needs 7 where jumping needs 9.
+
+So the tile-labelling rewrite would be built on a refuted premise: making
+within-tile chain walks local cannot help when there are barely any chain walks.
+What sets the gather cost is that `a = p[i]` is a spatial neighbour, and in
+linear indexing a spatial neighbour is ±1 (same line), ±X (4.8 KB away) or ±YX
+(5.76 MB away) - so two thirds of gathers miss. Fixing that means re-indexing
+the volume into a tiled or Morton order, which is a far larger change than tile
+labelling and touches every kernel.
+
+Leaving both variants in place behind the switch rather than deleting the loser:
+this is exactly the measurement E1 needs to repeat on the 3090 Ti, where L2 goes
+from 96 MB to 6 MB and the cost of a missing gather changes by a large factor.
+That is the term most likely to reverse the ranking, and it is cheap to re-run.
+
+I also considered skipping the final round's flatten, since the round that
+observes no hook change appears to be pure overhead. It is not safe: if adjacent
+voxels in a component share a parent value that is not itself a root, the hook
+reports no change while parent is still unflattened, and the flatten's flag is
+what catches it. `vcount` is indexed by `parent[i]`, so an unflattened parent
+splits a plateau's count and undersizes its BFS queue. The last round is the
+price of proving flatness.

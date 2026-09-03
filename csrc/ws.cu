@@ -1067,6 +1067,49 @@ __global__ void k_uf_compress_c(uint32_t* p, int* changed, int64_t n) {
     if (now != was) atomicExch(changed, 1);
 }
 
+// Flattening by pointer jumping: p[i] <- p[p[i]], one hop per round.
+//
+// k_uf_compress_c walks each chain to its root and then walks it a second time
+// writing the root into every entry on the way. Timing the two kernels of the
+// round separately puts it at 317 ms of the union-find's 499 ms while moving
+// only about 2 GB, so it runs some 30x off bandwidth roofline -- the cost is
+// chains of dependent random loads, not bytes.
+//
+// A jump is two loads and at most one store, and it halves every chain, so the
+// convergence-driven loop gets there in O(log L) rounds of far cheaper work.
+// This is a legitimate substitution rather than an approximation because what
+// the gate pins is the fixed point, not the path taken to it: the loop settles
+// when neither hooking nor flattening changes anything, and that state is
+// exactly "every entry holds its component's minimum index" either way.
+//
+// Only valid where parent has no SENT entries. e9b_divide_d initialises with
+// k_parent_init (p[i] = i everywhere), so it qualifies; the older SENT-carrying
+// paths must keep using uf_find.
+__global__ void k_uf_jump(uint32_t* p, int* changed, int64_t n) {
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    const uint32_t a = p[i];
+    if (a == (uint32_t)i) return;   // already a root
+    const uint32_t b = p[a];
+    if (b == a) return;             // parent is a root, nothing left to gain
+    p[i] = b;
+    atomicExch(changed, 1);
+}
+
+// Which flattening kernel the plateau union-find uses. 0 = uf_find path
+// compression (the shape the fingerprint was established with), 1 = pointer
+// jumping. Selectable so the two can be gated separately and timed against
+// each other in one interleaved run, which is the only trustworthy comparison
+// while the card is shared.
+static int uf_algo() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_UF_ALGO");
+        cached = s ? std::atoi(s) : 0;
+    }
+    return cached;
+}
+
 __global__ void k_count_v2(
     const uint8_t* bits, const uint32_t* flag, const uint32_t* parent,
     uint32_t* vcount, int64_t Z, int64_t Y, int64_t X)
@@ -1293,7 +1336,11 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
         k_hook_bidir<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, parent, uf_changed, Z, Y, X);
         cudaEventRecord(hk1);
         cudaEventRecord(cp0);
-        k_uf_compress_c<<<blocks, threads>>>(parent, uf_changed, size);
+        if (uf_algo() == 1) {
+            k_uf_jump<<<blocks, threads>>>(parent, uf_changed, size);
+        } else {
+            k_uf_compress_c<<<blocks, threads>>>(parent, uf_changed, size);
+        }
         cudaEventRecord(cp1);
         int h = 0;
         cudaMemcpy(&h, uf_changed, 4, cudaMemcpyDeviceToHost);
@@ -1316,8 +1363,9 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     cudaEventDestroy(uev0);
     cudaEventDestroy(uev1);
     cudaFree(uf_changed);
-    fprintf(stderr, "E9b uf_rounds=%d/%d uf_ms=%.2f hook_ms=%.2f comp_ms=%.2f%s\n",
-            uf_rounds, uf_cap, uf_ms, hook_ms, comp_ms,
+    fprintf(stderr,
+            "E9b uf_algo=%d uf_rounds=%d/%d uf_ms=%.2f hook_ms=%.2f comp_ms=%.2f%s\n",
+            uf_algo(), uf_rounds, uf_cap, uf_ms, hook_ms, comp_ms,
             uf_rounds >= uf_cap ? " NOT-CONVERGED" : "");
     k_corner_flag<<<blocks, threads>>>(bits_d, flag, Z, Y, X);
     k_count_v2<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, flag, parent, vcount, Z, Y, X);
