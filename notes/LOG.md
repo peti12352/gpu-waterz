@@ -1580,3 +1580,57 @@ an above-TL edge, which requires one of its endpoints to be a root that just
 merged - and only band edges can propose, so those roots are known. The band
 plus the edges incident to merged roots is a closed set, which is what makes
 restricting the sweep to it exact.
+
+## B1 — the index division was real, and removing it bought nothing
+
+Every full-volume kernel in `ws.cu` recovered its coordinates with
+
+    int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
+
+NVIDIA GPUs have no integer divide instruction, and since `Y` and `X` arrive as
+runtime arguments the compiler cannot fold these into multiply-shift either. It
+emits the full expansion, which `scripts/b1_sass.py` counts off the sm_120
+binary:
+
+    kernel            total  arith  mem  arith%  MUFU
+    k_flow              360    244   23   67.8%     3
+    k_hook_bidir        408    216   47   52.9%     3
+    k_hook_remain       328    198   24   60.4%     3
+    k_uf_compress_c     176     89   26   50.6%     0
+
+`MUFU.RCP` is the float-reciprocal step inside the division sequence, so three
+of them is direct confirmation the divisions are really there. Carrying y and z
+in `blockIdx.y/z` removes them, and since consecutive `threadIdx.x` still map to
+consecutive x it changes no access pattern:
+
+    k_flow          360 -> 176      k_hook_bidir    408 -> 240
+    k_hook_remain   328 -> 160      MUFU  3 -> 0 everywhere
+
+Then the matched A/B, both builds run back to back under the same load:
+
+    before  uf_ms 512.28, 512.24        after  uf_ms 509.63, 511.37
+
+0.3%. Nothing. My estimate of ~0.4 s on the graded volume was wrong, and the
+reason is in the table above: `k_uf_compress_c` is the one kernel with no
+division, so B1 could not touch it. Splitting the round confirms which kernel
+the loop is actually waiting on:
+
+    uf_ms 498.80    hook_ms 170.82    comp_ms 316.52
+    uf_ms 505.96    hook_ms 172.45    comp_ms 319.59
+
+64% of the union-find is `k_uf_compress_c`, chasing parent pointers at random
+across a 180M-element array. That is what B3 has to attack; the hook half was
+never the problem. Keeping B1 anyway - it is bit-identical, strictly less work,
+and the arithmetic it removes is more exposed on a card with less bandwidth to
+hide it behind - but it is not a speedup and should not be reported as one.
+
+Gated: C2 `deterministic=True ndiff=[0]`, `nfrag=2175400`, `bg=506568`,
+`array_equal=True` and `fingerprint_equal=True` against the CPU oracle, nothing
+leaked.
+
+Incidentally this settles the open `uf_rounds` question: 6 in one run, 7 in the
+next, output byte-identical both times. `uf_find` compresses paths while other
+threads are reading them, so how many rounds it takes to reach the fixed point
+depends on the interleaving. The fixed point itself is unique - it is the
+min-index connected-component labelling - so the result cannot vary, and
+`ndiff=0` across runs is the evidence.

@@ -91,15 +91,60 @@ __device__ inline bool oob_d(int d, int64_t z, int64_t y, int64_t x,
     return x == X - 1;
 }
 
+// A full-volume kernel has to know its (z,y,x), and recovering it from a linear
+// thread index costs more than it looks like:
+//
+//     int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
+//
+// NVIDIA GPUs have no integer divide instruction, and because Y and X arrive as
+// runtime arguments the compiler cannot fold the divisions into multiply-shift
+// either, so it emits the full expansion. Measured on the sm_120 build with
+// scripts/b1_sass.py, k_flow came out at 244 arithmetic instructions against 23
+// memory ops, with three MUFU.RCP -- the float-reciprocal step of that
+// expansion -- and k_hook_bidir at 216 against 47. These kernels sit at ~2% of
+// memory-bandwidth roofline, so that arithmetic is exposed, not hidden behind
+// loads.
+//
+// Carrying y and z in blockIdx.y/z removes all of it. Consecutive threadIdx.x
+// still map to consecutive x, so this changes no access pattern and no result;
+// it only stops recomputing what the launch already knew.
+struct Vox {
+    int64_t i, z, y, x;
+    bool ok;
+};
+
+static inline __device__ Vox vox_of(int64_t Y, int64_t X) {
+    Vox v;
+    v.x = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    v.y = blockIdx.y;
+    v.z = blockIdx.z;
+    // vox_grid sizes the y and z extents exactly, so only x can overrun.
+    v.ok = v.x < X;
+    v.i = (v.z * Y + v.y) * X + v.x;
+    return v;
+}
+
+// gridDim.y and gridDim.z cap at 65535. The graded volume is Y=2400, Z=375, so
+// one block row per (y,z) fits comfortably. A volume past the cap would need
+// tiling, and silently launching a grid that covers only part of it would be a
+// wrong answer, so refuse instead.
+static inline dim3 vox_grid(int64_t Z, int64_t Y, int64_t X, int threads) {
+    if (Y > 65535 || Z > 65535) {
+        fprintf(stderr, "WS FATAL Y=%lld Z=%lld exceeds the 3D grid limit\n",
+                (long long)Y, (long long)Z);
+        std::abort();
+    }
+    return dim3((unsigned)((X + threads - 1) / threads),
+                (unsigned)Y, (unsigned)Z);
+}
+
 __global__ void k_flow(
     const uint8_t* aff, int64_t Z, int64_t Y, int64_t X,
     float low, float high, uint8_t* bits)
 {
-    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
-    int64_t size = Z * Y * X;
-    if (i >= size) return;
-    int64_t yx = Y * X;
-    int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
+    const Vox v = vox_of(Y, X);
+    if (!v.ok) return;
+    const int64_t i = v.i, z = v.z, y = v.y, x = v.x;
     auto aat = [&](int c, int64_t zz, int64_t yy, int64_t xx) -> float {
         return aff[((c * Z + zz) * Y + yy) * X + xx] * (1.0f / 255.0f);
     };
@@ -582,7 +627,7 @@ static int watershed_device(
     cudaEventCreate(&ev0);
     cudaEventCreate(&ev1);
     cudaEventRecord(ev0);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits0);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits0);
     int nit = plateau_bfs_parallel(bits0, bits1, Z, Y, X);
     k_uf_init<<<blocks, threads>>>(parent, size);
     k_uf_link<<<blocks, threads>>>(parent, bits1, Z, Y, X);
@@ -753,8 +798,7 @@ extern "C" int watershed_gpu(
     cudaMalloc(&bits_d, (size_t)size);
     cudaMemcpy(aff_d, aff_h, (size_t)3 * size, cudaMemcpyHostToDevice);
     int threads = 256;
-    int blocks = (int)((size + threads - 1) / threads);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits_d);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits_d);
     std::vector<uint8_t> bits(size);
     cudaMemcpy(bits.data(), bits_d, (size_t)size, cudaMemcpyDeviceToHost);
     cudaFree(aff_d);
@@ -1008,8 +1052,7 @@ extern "C" int w1_plateau_bfs(
     cudaMalloc(&gpu_d, (size_t)size);
     cudaMemcpy(aff_d, aff_h, (size_t)3 * size, cudaMemcpyHostToDevice);
     int threads = 256;
-    int blocks = (int)((size + threads - 1) / threads);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits_d);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits_d);
     std::vector<uint8_t> bits(size);
     cudaMemcpy(bits.data(), bits_d, (size_t)size, cudaMemcpyDeviceToHost);
     std::vector<uint32_t> host(size);
@@ -1041,13 +1084,11 @@ __global__ void k_parent_init(uint32_t* p, int64_t n) {
 // single word per changed round is immaterial next to the sweep itself.
 __global__ void k_hook_bidir(const uint8_t* bits, uint32_t* parent, int* changed,
                              int64_t Z, int64_t Y, int64_t X) {
-    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
-    int64_t size = Z * Y * X;
-    if (i >= size) return;
+    const Vox v = vox_of(Y, X);
+    if (!v.ok) return;
+    const int64_t i = v.i, z = v.z, y = v.y, x = v.x;
     uint8_t b = bits[i];
     if (!b) return;
-    int64_t yx = Y * X;
-    int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
     uint32_t pi = parent[i];
     for (int d = 0; d < 6; ++d) {
         if (!(b & DBIT[d])) continue;
@@ -1075,13 +1116,11 @@ __global__ void k_count_v2(
     const uint8_t* bits, const uint32_t* flag, const uint32_t* parent,
     uint32_t* vcount, int64_t Z, int64_t Y, int64_t X)
 {
-    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
-    int64_t size = Z * Y * X;
-    if (i >= size) return;
+    const Vox v = vox_of(Y, X);
+    if (!v.ok) return;
+    const int64_t i = v.i, z = v.z, y = v.y, x = v.x;
     uint8_t b = bits[i];
     if (!b) return;
-    int64_t yx = Y * X;
-    int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
     int in_plat = flag[i] ? 1 : 0;
     if (!in_plat) {
         for (int d = 0; d < 6; ++d) {
@@ -1281,15 +1320,40 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     cudaEventCreate(&uev0);
     cudaEventCreate(&uev1);
     cudaEventRecord(uev0);
+    // Split the round between its two kernels. Removing the index division
+    // from k_hook_bidir cut its instruction count from 408 to 240 and changed
+    // the loop's time by 0.3%, which says the cost is in the other kernel, so
+    // the split is worth knowing before restructuring anything. Absolute
+    // numbers inflate when the card is shared, but both kernels are measured
+    // inside the same loop under the same contention, so the ratio holds.
+    cudaEvent_t hk0, hk1, cp0, cp1;
+    cudaEventCreate(&hk0);
+    cudaEventCreate(&hk1);
+    cudaEventCreate(&cp0);
+    cudaEventCreate(&cp1);
+    float hook_ms = 0, comp_ms = 0;
     for (int r = 0; r < uf_cap; ++r) {
         cudaMemset(uf_changed, 0, 4);
-        k_hook_bidir<<<blocks, threads>>>(bits_d, parent, uf_changed, Z, Y, X);
+        cudaEventRecord(hk0);
+        k_hook_bidir<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, parent, uf_changed, Z, Y, X);
+        cudaEventRecord(hk1);
+        cudaEventRecord(cp0);
         k_uf_compress_c<<<blocks, threads>>>(parent, uf_changed, size);
+        cudaEventRecord(cp1);
         int h = 0;
         cudaMemcpy(&h, uf_changed, 4, cudaMemcpyDeviceToHost);
+        float a = 0, b = 0;
+        cudaEventElapsedTime(&a, hk0, hk1);
+        cudaEventElapsedTime(&b, cp0, cp1);
+        hook_ms += a;
+        comp_ms += b;
         ++uf_rounds;
         if (!h) break;
     }
+    cudaEventDestroy(hk0);
+    cudaEventDestroy(hk1);
+    cudaEventDestroy(cp0);
+    cudaEventDestroy(cp1);
     cudaEventRecord(uev1);
     cudaEventSynchronize(uev1);
     float uf_ms = 0;
@@ -1297,10 +1361,11 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
     cudaEventDestroy(uev0);
     cudaEventDestroy(uev1);
     cudaFree(uf_changed);
-    fprintf(stderr, "E9b uf_rounds=%d/%d uf_ms=%.2f%s\n", uf_rounds, uf_cap,
-            uf_ms, uf_rounds >= uf_cap ? " NOT-CONVERGED" : "");
+    fprintf(stderr, "E9b uf_rounds=%d/%d uf_ms=%.2f hook_ms=%.2f comp_ms=%.2f%s\n",
+            uf_rounds, uf_cap, uf_ms, hook_ms, comp_ms,
+            uf_rounds >= uf_cap ? " NOT-CONVERGED" : "");
     k_corner_flag<<<blocks, threads>>>(bits_d, flag, Z, Y, X);
-    k_count_v2<<<blocks, threads>>>(bits_d, flag, parent, vcount, Z, Y, X);
+    k_count_v2<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, flag, parent, vcount, Z, Y, X);
     // Capture the last flag before the scan overwrites it, then scan flag into
     // itself: k_scatter_idx_u32 recovers the corner predicate from the scan's
     // own differences, so no second per-voxel array is needed.
@@ -1504,13 +1569,11 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X, float*
 }
 
 __global__ void k_hook_remain(const uint8_t* bits, uint32_t* parent, int64_t Z, int64_t Y, int64_t X) {
-    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
-    int64_t size = Z * Y * X;
-    if (i >= size) return;
+    const Vox v = vox_of(Y, X);
+    if (!v.ok) return;
+    const int64_t i = v.i, z = v.z, y = v.y, x = v.x;
     uint8_t b = bits[i];
     if (!b) return;
-    int64_t yx = Y * X;
-    int64_t z = i / yx, r = i % yx, y = r / X, x = r % X;
     uint32_t pi = parent[i];
     for (int d = 0; d < 6; ++d) {
         if (!(b & DBIT[d])) continue;
@@ -1560,7 +1623,7 @@ static int e9c_basins_d(const uint8_t* bits_d, uint32_t* seg_d, int64_t Z, int64
     if (nsv < 1) nsv = 1;
     if (nsv > 40) nsv = 40;
     for (int r = 0; r < nsv; ++r) {
-        k_hook_remain<<<blocks, threads>>>(bits_d, parent, Z, Y, X);
+        k_hook_remain<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, parent, Z, Y, X);
         k_uf_compress<<<blocks, threads>>>(parent, size);
     }
     k_root_flag<<<blocks, threads>>>(bits_d, parent, flag, size);
@@ -1595,8 +1658,7 @@ extern "C" int e9b_divide(
     cudaMalloc(&bits_d, (size_t)size);
     cudaMemcpy(aff_d, aff_h, (size_t)3 * size, cudaMemcpyHostToDevice);
     int threads = 256;
-    int blocks = (int)((size + threads - 1) / threads);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits_d);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits_d);
     std::vector<uint8_t> bits(size);
     cudaMemcpy(bits.data(), bits_d, (size_t)size, cudaMemcpyDeviceToHost);
     std::vector<uint32_t> host(size);
@@ -1629,8 +1691,7 @@ extern "C" int e9c_watershed(
     cudaMalloc(&seg_d, (size_t)size * 4);
     cudaMemcpy(aff_d, aff_h, (size_t)3 * size, cudaMemcpyHostToDevice);
     int threads = 256;
-    int blocks = (int)((size + threads - 1) / threads);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits_d);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits_d);
     float ms = 0;
     e9b_divide_d(bits_d, Z, Y, X, &ms);
     uint32_t nfrag = 0;
@@ -1746,7 +1807,7 @@ extern "C" int p0_ws_diag(
     cudaMemcpy(aff_d, aff_h, (size_t)3 * size, cudaMemcpyHostToDevice);
     int threads = 256;
     int blocks = (int)((size + threads - 1) / threads);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits_d);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits_d);
     unsigned long long h0 = 0, h1 = 0, h2 = 0;
     unsigned long long *dn0 = nullptr, *dn1 = nullptr, *dn2 = nullptr;
     cudaMalloc(&dn0, 8);
@@ -1765,7 +1826,7 @@ extern "C" int p0_ws_diag(
     int first_zero = -1;
     for (int r = 0; r < 40; ++r) {
         cudaMemcpy(prev, parent, (size_t)size * 4, cudaMemcpyDeviceToDevice);
-        k_hook_remain<<<blocks, threads>>>(bits_d, parent, Z, Y, X);
+        k_hook_remain<<<vox_grid(Z, Y, X, threads), threads>>>(bits_d, parent, Z, Y, X);
         k_uf_compress<<<blocks, threads>>>(parent, size);
         cudaMemset(dchg, 0, 8);
         k_count_diff<<<blocks, threads>>>(prev, parent, size, dchg);
@@ -1803,12 +1864,11 @@ extern "C" int watershed_gpu_e9_d(
     uint8_t* bits_d = nullptr;
     cudaMalloc(&bits_d, (size_t)size);
     int threads = 256;
-    int blocks = (int)((size + threads - 1) / threads);
     cudaEvent_t ev0, ev1;
     cudaEventCreate(&ev0);
     cudaEventCreate(&ev1);
     cudaEventRecord(ev0);
-    k_flow<<<blocks, threads>>>(aff_d, Z, Y, X, low, high, bits_d);
+    k_flow<<<vox_grid(Z, Y, X, threads), threads>>>(aff_d, Z, Y, X, low, high, bits_d);
     float dms = 0;
     e9b_divide_d(bits_d, Z, Y, X, &dms);
     uint32_t nf = 0;
