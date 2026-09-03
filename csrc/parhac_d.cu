@@ -278,20 +278,49 @@ __global__ void k_copy_sz(const uint32_t* sz, uint32_t* sz0, int nnode)
     if (i < nnode) sz0[i] = sz[i];
 }
 
+// nabove counts live edges that are above TL and join two distinct roots. That
+// condition is independent of the colouring, so nabove == 0 means no colouring
+// whatsoever can produce a proposal and every remaining outer round of the
+// layer is a no-op. The caller uses it to leave the layer early; see the outer
+// loop in parhac_e6s_dev.
+//
+// It has to be reduced across the whole block before any thread returns, which
+// is why the eligibility test is now computed into a flag instead of a chain of
+// early returns. The proposal logic below is unchanged.
 __global__ void k_propose(
     const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
     uint32_t* parent, const uint32_t* sz, const uint8_t* color, const uint8_t* frozen,
-    int64_t n, double TL, unsigned long long* prop, uint64_t seed, uint64_t cseed, int* dbg)
+    int64_t n, double TL, unsigned long long* prop, uint64_t seed, uint64_t cseed,
+    int* dbg, int* nabove)
 {
     int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
-    if (i >= n || ct[i] < 1) return;
-    if (dbg) atomicAdd(dbg + 0, 1);
-    double mean = sm[i] / (double)ct[i];
-    if (mean < TL) return;
-    if (dbg) atomicAdd(dbg + 1, 1);
-    uint32_t a = dfind_nocomp(parent, u[i]), b = dfind_nocomp(parent, v[i]);
-    if (a == b || a == 0 || b == 0) return;
-    if (dbg) atomicAdd(dbg + 2, 1);
+    int above = 0;
+    uint32_t a = 0, b = 0;
+    if (i < n && ct[i] >= 1) {
+        if (dbg) atomicAdd(dbg + 0, 1);
+        double mean = sm[i] / (double)ct[i];
+        if (mean >= TL) {
+            if (dbg) atomicAdd(dbg + 1, 1);
+            a = dfind_nocomp(parent, u[i]);
+            b = dfind_nocomp(parent, v[i]);
+            if (a != b && a != 0 && b != 0) {
+                if (dbg) atomicAdd(dbg + 2, 1);
+                above = 1;
+            }
+        }
+    }
+    if (nabove) {
+        // One shared counter per block, one global atomic per block. nabove is
+        // a kernel argument so the branch is block-uniform and the barriers
+        // below are reached by every thread.
+        __shared__ int sh_above;
+        if (threadIdx.x == 0) sh_above = 0;
+        __syncthreads();
+        if (above) atomicAdd(&sh_above, 1);
+        __syncthreads();
+        if (threadIdx.x == 0 && sh_above) atomicAdd(nabove, sh_above);
+    }
+    if (!above) return;
     uint8_t ca = color_of(a, cseed);
     uint8_t cb = color_of(b, cseed);
     (void)color;
@@ -1682,7 +1711,8 @@ static int parhac_dev(
                         du, dv, dsm, dct, dparent, dsz, dcolor, dfrozen,
                         nlive, TL, dprop,
                         0xA5A5ULL + (uint64_t)inner * 17 + (uint64_t)outer,
-                        0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer, ddbg);
+                        0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer,
+                        ddbg, nullptr);
                     k_pack_prop<<<bn, threads>>>(
                         dprop, dsz, nnode, dreds, dblues, dadd, dpris, dnprop);
                     ev_propose.stop();
@@ -1853,6 +1883,17 @@ struct P0aaProf {
     int n_layer;
     int layer_outers[64];
     int layer_merges[64];
+    // A2 work accounting. These are counts, not times, so they are unaffected
+    // by anything else running on the card.
+    //   layer_first_zero  outer index at which the layer ran out of above-TL
+    //                     edges, i.e. where the outer loop could have stopped;
+    //                     -1 if it never did within the cap
+    //   sum_nlive         live edges visited summed over inner iterations, the
+    //                     quantity a dirty-set compaction has to reduce
+    //   sum_above         of those, how many were actually eligible to merge
+    int layer_first_zero[64];
+    int64_t sum_nlive;
+    int64_t sum_above;
 };
 
 static int parhac_e6s_dev(
@@ -1884,7 +1925,13 @@ static int parhac_e6s_dev(
     cudaMalloc(&dblues, (size_t)nnode * 4);
     cudaMalloc(&dadd, (size_t)nnode * 4);
     cudaMalloc(&dnmerge, 4);
-    cudaMalloc(&dnprop, 4);
+    // Two adjacent words: the proposal count and the above-TL edge count. They
+    // are produced in the same inner iteration and consumed together, so
+    // keeping them adjacent lets the layer-exit test ride along on the
+    // device-to-host copy the loop already makes for nprop instead of adding a
+    // second round-trip per iteration.
+    cudaMalloc(&dnprop, 8);
+    int* dnabove = dnprop + 1;
     // Proposal sort buffers and CUB scratch, sized once for the largest
     // possible proposal count. Sizing per call was the whole problem: thrust
     // allocated its own temporaries and synchronized on every one of the ~3700
@@ -2000,6 +2047,8 @@ static int parhac_e6s_dev(
             if (be < 1) be = 1;
             int layer_merges = 0;
             int layer_outers = 0;
+            int layer_first_zero = -1;
+            bool layer_done = false;
             for (int outer = 0; outer < max_outer; ++outer) {
                 ev_compress.start();
                 k_compress<<<bn, threads>>>(dparent, nnode);
@@ -2019,7 +2068,7 @@ static int parhac_e6s_dev(
                     ev_memset.start();
                     cudaMemset(dprop, 0, (size_t)nnode * 8);
                     cudaMemset(dnmerge, 0, 4);
-                    cudaMemset(dnprop, 0, 4);
+                    cudaMemset(dnprop, 0, 8);
                     if (zprof) cudaMemset(ddbg, 0, 20);
                     ev_memset.stop();
                     ev_propose.start();
@@ -2028,16 +2077,35 @@ static int parhac_e6s_dev(
                         nlive, TL, dprop,
                         0xA5A5ULL + (uint64_t)inner * 17 + (uint64_t)outer,
                         0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer,
-                        zprof ? ddbg : nullptr);
+                        zprof ? ddbg : nullptr, dnabove);
                     ev_propose.stop();
                     ev_pack.start();
                     k_pack_prop_fused<<<bn, threads>>>(
                         dprop, dsz, nnode, pkey_in, ppay_in, dnprop);
                     ev_pack.stop();
-                    int nprop = 0;
+                    int hnp[2] = {0, 0};
                     ev_d2h.start();
-                    cudaMemcpy(&nprop, dnprop, 4, cudaMemcpyDeviceToHost);
+                    cudaMemcpy(hnp, dnprop, 8, cudaMemcpyDeviceToHost);
                     ev_d2h.stop();
+                    int nprop = hnp[0];
+                    const int nabove = hnp[1];
+                    if (aa) {
+                        aa->sum_nlive += nlive;
+                        aa->sum_above += nabove;
+                        if (nabove == 0 && layer_first_zero < 0)
+                            layer_first_zero = layer_outers;
+                    }
+                    // No edge is above TL between two distinct roots, so no
+                    // colouring can propose one and the layer is finished. The
+                    // outer loop had no such test and ran its full cap on every
+                    // layer, which measured 1088 rounds where 653 do the work.
+                    //
+                    // Leaving here is a no-op for the result, not an
+                    // approximation: the rounds it skips would re-run
+                    // compress/rebuild_sz (idempotent functions of parent),
+                    // re-colour, and propose nothing, so parent, sz and nlive
+                    // are already at the values the next layer would have read.
+                    if (nabove == 0) layer_done = true;
                     ++ninner;
                     int ngc = 0, nact = 0, ndirty = 0, nstar = 0;
                     if (zprof) {
@@ -2137,11 +2205,13 @@ static int parhac_e6s_dev(
                 ++nouter;
                 ++layer_outers;
                 if (nlive <= 0) break;
+                if (layer_done) break;
             }
             if (aa && aa->n_layer > 0 && aa->n_layer <= 64) {
                 int li = aa->n_layer - 1;
                 aa->layer_outers[li] = layer_outers;
                 aa->layer_merges[li] = layer_merges;
+                aa->layer_first_zero[li] = layer_first_zero;
             }
             if (layer_merges == 0) break;
         }
@@ -2824,7 +2894,8 @@ extern "C" int parhac_e6s_p0aa(
     const double* sm_h, const int64_t* ct_h,
     int64_t n_edges, const double* aff_thr, int n_thr, double eps,
     uint32_t* parent_out, uint32_t max_id, int64_t* stats_out,
-    double* phase_ms, int* n_layer, int* layer_outers, int* layer_merges)
+    double* phase_ms, int* n_layer, int* layer_outers, int* layer_merges,
+    int* layer_first_zero, int64_t* work_counts)
 {
     if (n_edges <= 0 || n_thr <= 0) return 0;
     uint32_t *du, *dv;
@@ -2861,6 +2932,14 @@ extern "C" int parhac_e6s_p0aa(
     }
     if (layer_merges) {
         for (int i = 0; i < aa.n_layer && i < 64; ++i) layer_merges[i] = aa.layer_merges[i];
+    }
+    if (layer_first_zero) {
+        for (int i = 0; i < aa.n_layer && i < 64; ++i)
+            layer_first_zero[i] = aa.layer_first_zero[i];
+    }
+    if (work_counts) {
+        work_counts[0] = aa.sum_nlive;
+        work_counts[1] = aa.sum_above;
     }
     cudaFree(du); cudaFree(dv); cudaFree(dsm); cudaFree(dct);
     return rc;

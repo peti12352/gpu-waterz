@@ -1513,3 +1513,70 @@ parent/flag/vcount and 2.7 B/vox of sort inputs. `vcount` is the next
 candidate, being 4 B/vox held across the corner phase for a `k_plat_meta` call
 that happens after it, though it is computed during the union-find phase
 before it, so moving it is not a lifetime tweak but a restructuring.
+
+## The layer loop never had a convergence test, and 97.6% of edge work is ineligible
+
+Two results from one piece of instrumentation, and the second is the largest
+finding in this log.
+
+`k_propose` already computes each edge's mean and compares it to `TL`. Counting
+the edges that clear that bar *and* join two distinct roots costs one shared
+counter and one global atomic per block, and the count rides along on the
+device-to-host copy the loop already made for `nprop` by allocating the two
+counters adjacent. So the measurement is free and, being a count, it is immune
+to the co-tenant on the card.
+
+### A1 — the outer loop ran its cap on every layer
+
+    for (int outer = 0; outer < max_outer; ++outer) {
+
+There was no convergence exit at all. The inner loop's `nprop <= 0` and
+`hm == 0` breaks only leave the *inner* loop; control fell through to the next
+outer round, which re-coloured and tried again. With `nlive > 0` that repeated
+to the cap unconditionally, giving 17 x 64 = 1088 rounds.
+
+The above-TL count is colour-independent, so when it is zero no colouring can
+propose anything and the layer is finished. Leaving then is a no-op rather than
+an approximation: the skipped rounds would re-run `k_compress` and
+`k_rebuild_sz` (idempotent functions of `parent`), re-colour, propose nothing,
+and never reach `k_freeze` or the compaction, so `parent`, `sz` and `nlive` are
+already at the values the next layer reads.
+
+    outer   1088 -> 653      inner   1840 -> 1405
+    nmerge  1853427 -> 1853427       sum_above  77586985 -> 77586985
+
+`sum_above` being *exactly* equal is the useful check: the eligible work is
+untouched, only the spinning is gone. Per-layer, the round at which the layer
+drained is
+
+    [-1, 48, 39, 41, 36, 44, 42, 46, 33, 39, 34, 36, 26, 29, 28, 28, 24]
+
+so only layer 1 genuinely needs the cap. This is 1.67x, not the 4x I guessed
+from `layer_merges` — layers do drain, just at round 24-48 rather than round 2.
+
+Gated: A2 `byte_identical=True ndiff=[0]`, ACCURACY GATE PASS at all four
+thresholds (0.2/0.3/0.4/0.5), `nseg` T=0.5 379292. The `A2 FAIL` line in that
+run is E6t, the StarMerge path already established as structurally
+non-deterministic and not used.
+
+### A3 — the real number
+
+    sum_nlive   3298578206      edges visited across inner iterations
+    sum_above     77586985      of those, eligible to merge
+    above_frac     0.0235
+
+97.6% of all edge work in the agglomeration is spent on edges below `TL` that
+cannot merge under any colouring. 3.3 billion visits to examine 78 million
+eligible ones. I had planned A3 around dirty *roots*; the counts say the
+partition that matters is the `TL` band, and the ceiling is 42x rather than the
+few-x a dirty-root scan would give.
+
+What makes a band partition exact rather than a heuristic: deduplication
+combines parallel edges as `(sm1+sm2)/(ct1+ct2)`, a weighted mean of the two
+component means, so the combined mean lies between them and can never exceed
+`max(mean1, mean2)`. Two below-TL edges therefore cannot combine into an
+above-TL one. The only way a below-TL edge enters the band is by combining with
+an above-TL edge, which requires one of its endpoints to be a root that just
+merged - and only band edges can propose, so those roots are known. The band
+plus the edges incident to merged roots is a closed set, which is what makes
+restricting the sweep to it exact.
