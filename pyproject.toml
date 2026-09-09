@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpu_waterz"
+version = "0.1.0"
+description = "GPU affinity-flow watershed + contact-mean agglomeration (waterz-compatible)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "peti12352" }]
+dependencies = [
+  "numpy>=1.22",
+]
+
+[project.optional-dependencies]
+torch = ["torch"]
+zarr = ["zarr"]
+dev = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/peti12352/gpu-waterz"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["gpu_waterz*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

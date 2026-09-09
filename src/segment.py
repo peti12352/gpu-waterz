@@ -487,13 +487,17 @@ def _ensure_sv7():
     lib.ws_set_sv_rounds(64)
 
 
-def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
+def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999, eps=None):
     """Return list of uint32 [Z,Y,X] final labels, one per affinity threshold.
+
+    Thresholds are affinity (merge while mean_aff > thr), not stock waterz
+    scores. `eps` sets ParHAC (1+eps); None uses WATERZ_AGG_EPS or dual-eps
+    defaults (0.08 multi-T / 0.40 single T=0.3).
 
     Host API copies aff to GPU for flow/RAG. Event window is device work only
     when using watershed_gpu_e9_d / rag_gpu_d / extract_gpu_d.
     WS = E9c (GPU divideplateaus + UF basins, W14 adaptive SV=7).
-    AGG=parhac-paper-ε 0.08 until a replacement locks.
+    AGG=parhac-paper-eps until a replacement locks.
     Extract = E10 extract_gpu.
     """
     aff_u8 = _as_u8(aff)
@@ -508,7 +512,7 @@ def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
     t1 = time.perf_counter()
     u, v, sm, ct = _rag(aff_u8, fr)
     t2 = time.perf_counter()
-    snaps = _parhac(u, v, sm, ct, thresholds, max_id=int(fr.max()))
+    snaps = _parhac(u, v, sm, ct, thresholds, max_id=int(fr.max()), eps=eps)
     t3 = time.perf_counter()
     out = [
         _extract_gpu(fr, snaps[float(t)]).reshape(fr.shape).astype(np.uint32, copy=False)
@@ -521,12 +525,14 @@ def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
 
 
 def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999,
-              return_device=False):
+              return_device=False, eps=None):
     """Device-resident WS + RAG + agglomeration + extract.
 
     `aff` is [3,Z,Y,X] uint8 or float32, either already in VRAM (anything
     implementing __cuda_array_interface__, which includes torch CUDA tensors,
     cupy and numba) or a host array, copied in before the timed region.
+
+    Thresholds are affinity. `eps` overrides ParHAC schedule (see `segment`).
 
     With `return_device` the labels stay in VRAM as DevBufs, which is the path
     TASK grades. Otherwise they come back as host uint32 [Z,Y,X].
@@ -685,14 +691,15 @@ def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999,
     if _PARHAC_D.is_file() and not os.environ.get("WATERZ_AGG_CPU"):
         snaps = _parhac_d_dev(
             u_d.ptr, v_d.ptr, sm_d.ptr, ct_d.ptr,
-            int(nedge), thresholds, max_id=int(nfrag.value),
+            int(nedge), thresholds, max_id=int(nfrag.value), eps=eps,
         )
     else:
         u = u_d.to_host(nedge)
         v = v_d.to_host(nedge)
         sm = sm_d.to_host(nedge)
         ct = ct_d.to_host(nedge)
-        snaps = _parhac(u, v, sm, ct, thresholds, max_id=int(nfrag.value))
+        snaps = _parhac(u, v, sm, ct, thresholds, max_id=int(nfrag.value),
+                        eps=eps)
     for b in (u_d, v_d, sm_d, ct_d):
         b.free()
     stage("agg")
