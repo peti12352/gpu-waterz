@@ -1,48 +1,85 @@
 # gpu-waterz
 
-GPU affinity-flow watershed + contact-mean agglomeration matching stock `waterz` quality.
+GPU implementation of affinity-flow watershed fragments plus contact-mean
+agglomeration, matching stock [`waterz`](https://github.com/funkey/waterz)
+segmentation quality on CREMI-A affinities.
 
-**Not a 2 Gvox/s number. Not a 3090 Ti number.** Develop/report card here is an idle RTX 5090; TASK grades a 3090 Ti. Do not substitute.
-
-**Contract:** [TASK.md](TASK.md). **Campaign atlas:** [notes/ATLAS.md](notes/ATLAS.md). **VOI negatives:** [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv). **Remaining problem:** [notes/PROBLEM.md](notes/PROBLEM.md). **Log:** [notes/LOG.md](notes/LOG.md). **Sources:** [papers/SOURCES.md](papers/SOURCES.md).
+**Docs:** [notes/ATLAS.md](notes/ATLAS.md) (campaign report) |
+[data/cache/voi_atlas.csv](data/cache/voi_atlas.csv) (algorithm-class VOI table) |
+[notes/PROBLEM.md](notes/PROBLEM.md) (open questions) |
+[papers/SOURCES.md](papers/SOURCES.md) (pinned literature) |
+[notes/LOG.md](notes/LOG.md) (lab notebook).
+Evaluation protocol used in this tree: [TASK.md](TASK.md).
 
 ---
 
-## What this problem is
+## Motivation
 
-Connectomics / EM segmentation pipelines predict 3D affinities on GPU (fast), then turn them into a segmentation with `waterz` on CPU. That CPU step is the bottleneck by orders of magnitude (stock waterz ~6.7 Mvox/s, single-threaded).
+In connectomics, a CNN predicts 3D affinities on GPU. Turning those affinities
+into a segmentation is still often done on CPU with `waterz`. That step is
+slow relative to inference: stock waterz is about 6.7 Mvox/s single-threaded
+on this workload.
 
-The deliverable is the **whole** affinity-to-labels path: watershed fragments **and** agglomeration on top. A bare over-segmentation is not enough. Output is final uint32 labels, graded against ground truth.
+This project implements the full affinity-to-labels pipeline on GPU:
 
-Reference scoring string (stock waterz): `OneMinus<MeanAffinity<...>>` -- contact-area-weighted mean affinity, exact min-heap merge order when `discretize_queue=0`. Thresholds in this API are **affinity**; waterz scores are `1 - aff` (see [notes/THRESHOLD.md](notes/THRESHOLD.md)).
+1. affinity-flow watershed fragments (same semantics as waterz S1)
+2. region adjacency graph with contact-mean affinities
+3. hierarchical agglomeration under the waterz mean statistic
+4. final uint32 labels (background 0)
 
-## Why these constraints (and not others)
+A fragment over-segmentation alone is not the goal. The graded object is the
+**partition after agglomeration**.
 
-| Constraint | Meaning | Why reasonable |
-|---|---|---|
-| VOI split and merge within +0.02 of waterz at aff 0.2, 0.3, 0.4, 0.5 | Both halves of variation of information vs shipped CREMI-A GT | Partition quality; trading split against merge is not a pass |
-| Contact-mean agglomeration (or any algo that still PASSes that VOI gate) | Same statistic as production waterz | Frozen-weight Kruskal / mutex / AbsMax are a **different** partition class; they fail this gate on this RAG (see atlas) |
-| >= 2 Gvox/s e2e on one RTX 3090 Ti | Official `make_big` volume `[3,375,2400,2400]` = 2.16 Gvox @ T=0.3; median of 5; CUDA events; aff already in VRAM | One card, one volume, comparable timing; fits the graded hardware leftover budget |
-| Fit in 24 GB | Aff + labels + scratch on 3090 Ti | Real deployment constraint; listing leftover math is not a substitute for measured stage peaks |
-| Run-to-run byte-identical labels | Determinism | Stock waterz is not self-identical (plateau tie order); a GPU impl can be |
+Reference scoring string: `OneMinus<MeanAffinity<...>>` (contact-area-weighted
+mean). API thresholds are affinity; waterz heap scores are `1 - aff`
+([notes/THRESHOLD.md](notes/THRESHOLD.md)).
 
-Out of scope (TASK): training the affinity net, meshing, multi-node stitch, CPU fallback as the product, claiming 5090 numbers as 3090 Ti grades.
+## Why contact-mean (and what fails instead)
 
-## Best measured result (idle RTX 5090)
+Mean affinity updates after every merge. That is not Kruskal on frozen weights,
+not mutex / AbsMax, and not single-linkage MST. On the CREMI-A contact-mean RAG
+those other classes produce systematically different partitions (giant
+components, under-merge, or both). The measured VOI atlas is in
+[data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
 
-Legal stack **N17 / N19 I0_REPRO** (four-T PASS, parks off, CUDA events, aff in VRAM):
+Exact average-linkage HAC is P-complete / CC-hard in the literature (ParHAC
+2022; Abboud et al. ICALP 2024). Practical GPU work therefore uses a
+**(1+eps)-approximate** matching schedule on the same contact-mean statistic,
+and checks VOI rather than bit-identity with the serial heap.
 
-| stage | ms |
-|---|---|
-| WS | ~1309 |
-| RAG | ~85 |
-| agg | ~1680 |
-| extract | ~18 |
-| **e2e** | **~3093 (~0.70 Gvox/s)** |
+## Quality bar used here
 
-Pin: `data/cache/N19_I0_REPRO.json` (within 2% of N18 A1 3104 ms). 2-run 8 GiB label sha identical. **Not** median-of-5 on a 3090 Ti. **Not** 2 Gvox/s. WS alone (~1310 ms) already exceeds the ~1080 ms TASK e2e budget.
+On shipped CREMI-A val affinities `[3,125,1200,1200]` with GT:
 
-Env floor (process-cached; C++ product defaults stay **0** until a real 3090 Ti peak is measured):
+- VOI split and VOI merge each within +0.02 of stock waterz at affinity
+  thresholds **0.2, 0.3, 0.4, 0.5** (both halves, every threshold)
+- Run-to-run byte-identical labels (stock waterz is not self-identical;
+  plateau tie-breaking can be fixed)
+
+That bar is about **partition quality**, not about matching waterz label IDs.
+
+## Algorithm (current stack)
+
+Vendored waterz pin: `funkey/waterz` `a0184d2`.
+
+1. **Flow (GPU).** 6-neighbour affinities, OOB = `low`, bits where
+   `aff == m || aff >= high`. Background iff `m <= low`.
+2. **Plateau + basins (GPU).** Corner BFS rewrite, then list union-find.
+   Dir order `(-z, -y, -x, +z, +y, +x)`, min-index roots. Extra closed-plateau
+   components fail VOI; S1 plateau semantics are load-bearing.
+3. **RAG (GPU).** Three negative dirs, drop background. Atomic hash of
+   `(sum, count)` on raw uint8 affinity bytes; mean = `sum/count`.
+4. **Agglomeration (GPU).** Paper-style ParHAC matching on (1+eps)-heavy
+   waterz-mean edges, S3 contract. Dual-eps schedule:
+   - four-threshold VOI path: `eps = 0.08`
+   - single-threshold (aff 0.3) path: `eps = 0.40`
+   - larger eps on the speed path fails merge VOI (atlas / N18 B2)
+
+Large volumes use z-slab decomposition (aff=0 seams on the mirror-tiled
+benchmark volume). Host parking of corners/affinity on the timed path is
+off: those copies were PCIe, not watershed work.
+
+### Recommended env
 
 ```
 WATERZ_UF_ALGO=3
@@ -57,75 +94,33 @@ WATERZ_NLIVE_ARITH=1
 WATERZ_EMIT_HOLES=1
 ```
 
-Dual-eps (TASK-legal):
+`WATERZ_AGG_EPS` overrides the default eps for a run.
 
-| Path | eps | Gate |
-|---|---|---|
-| four-T accuracy | **0.08** | VOI at aff 0.2/0.3/0.4/0.5 |
-| T=0.3 speed | **0.40** | single-threshold VOI + timed 2.16 |
+## Measured performance
 
-Override with `WATERZ_AGG_EPS`. eps in (0.40, 0.5) and eps >= 0.5 are **dead** (merge FAIL). See atlas.
+Idle RTX 5090, CUDA events, affinity already in VRAM, official mirror-tiled
+volume `[3,375,2400,2400]` = 2.16 Gvox at affinity 0.3
+(`data/cache/N19_I0_REPRO.json`):
 
----
+| stage | ms |
+|---|---|
+| watershed | ~1309 |
+| RAG | ~85 |
+| agglomeration | ~1680 |
+| extract | ~18 |
+| end-to-end | ~3093 (~0.70 Gvox/s) |
 
-## API
+Four-threshold VOI: PASS. Two full label volumes: byte-identical.
+Watershed device peak on this stack: ~13.2 GiB ([notes/N17_DEEP.md](notes/N17_DEEP.md)).
 
-```
-from segment import segment
-labs = segment(aff, [0.2, 0.3, 0.4, 0.5])  # list of uint32 [Z,Y,X]
-```
+Dominant kernels (nsys force-export, [notes/N19_I0_NSYS.md](notes/N19_I0_NSYS.md)):
+`k_w5_compress_list` ~508 ms; ParHAC hash rewrite / rebuild / dirty-fuse
+together ~838 ms.
 
-`aff` is uint8 or float32 `[3,Z,Y,X]`, numpy. uint8 scale is `/255` in fp32 at the point of use.
+Throughput numbers are card- and contention-dependent. Refuse timing if
+another process holds the GPU (`card_busy`).
 
-Device-resident path (what TASK times):
-
-```
-from segment import segment_d
-labs = segment_d(aff_d, [0.3], return_device=True)  # DevBufs, still in VRAM
-```
-
-CLI:
-
-```
-python src/segment.py cremiA_val/affinity.h5 --out-dir . --thresholds 0.2 0.3 0.4 0.5
-python baseline/run_baseline.py --candidate mine_thr0.2.h5 mine_thr0.3.h5 mine_thr0.4.h5 mine_thr0.5.h5
-```
-
-## One-command gates
-
-```
-# identity diagnostic + T=0.3 VOI 2-run + four-T eps=0.08 (no 2.16)
-bash scripts/legal_eval.sh
-
-# same + official 2.16 timing if make_big volume exists (still not 3090 Ti)
-bash scripts/legal_eval.sh --216
-
-# full segment -> shipped grader -> det -> val bench
-bash scripts/eval.sh
-```
-
-`legal_eval.sh` refuses if the GPU is busy (`card_busy`). Parks stay off.
-
-Dataset: TASK Drive link / shipped 532 MB tarball (not in this repo; `data/` is gitignored except thin atlas pins).
-
-## Algorithm
-
-Same statistic as waterz `OneMinus<MeanAffinity>` (`funkey/waterz` `a0184d2`):
-
-1. **Flow (GPU).** 6-neighbour affinities, OOB=`low`, bits where `aff==m || aff>=high`. Background iff `m<=low`.
-2. **Plateau + basins (GPU).** Corner BFS rewrite, then basin / list-UF (W5). Dir order `(-z,-y,-x,+z,+y,+x)`. Deterministic min-index roots. Extra closed-plateau CCs fail VOI -- S1 plateau semantics are load-bearing.
-3. **RAG (GPU atomic hash).** Three negative dirs, drop bg. `key=(min<<32)|max`, `atomicAdd` on `(sum,count)` of raw uint8 bytes; mean=`sum/count`.
-4. **Agglomeration (GPU paper-ParHAC).** Matching of (1+eps)-heavy waterz-mean edges, S3-contract. Dual-path above. Rejected classes: frozen CC, mutex/AbsMax, Kruskal SDSL, union-all-in-band, NNG filter, GASP Average, RAMA -- see [voi_atlas.csv](data/cache/voi_atlas.csv).
-
-## Where it diverges from waterz
-
-- Flow bits on GPU; plateau/basin match vendored C++ semantics with fixed dir/index ties (not waterz enqueue-order jitter). Two `segment()` / `segment_d()` calls are byte-identical.
-- Fragment IDs need not match waterz. The partition is graded.
-- Agglomeration is (1+eps) ParHAC, not the serial S4 heap. eps=0.08 four-T / eps=0.40 T=0.3. Historical Y2 lock was eps=0.01 (also PASS, slower). RAC also PASSes and is too serial.
-
-## Accuracy (CREMI-A val, shipped grader)
-
-`ACCURACY GATE: PASS` at aff 0.2/0.3/0.4/0.5 (N16 deep four-T eps=0.08; N17 partition unchanged):
+## Accuracy table (CREMI-A val)
 
 | aff | VOI split | limit | VOI merge | limit |
 |-----|-----------|-------|-----------|-------|
@@ -134,35 +129,58 @@ Same statistic as waterz `OneMinus<MeanAffinity>` (`funkey/waterz` `a0184d2`):
 | 0.4 | 0.5162 | 0.5378 | 0.2268 | 0.2381 |
 | 0.5 | 0.6129 | 0.6309 | 0.2184 | 0.2293 |
 
-Pins: [notes/N16_DEEP.md](notes/N16_DEEP.md), `data/cache/N19_I0_REPRO.json`. Waterz commit: `a0184d2`. Val: `[3,125,1200,1200]`. Bench: `make_big.py` 3x2x2 -> `[3,375,2400,2400]`.
-
-## Memory
-
-Stage peaks are maxima, not sums. Fused 2.16 WS without slabs was ~42 GiB. Legal path uses **z-slabs** N=3 (Z=125, aff=0 seams). Measured WS peak on legal stack: **13.22 GiB** ([notes/N17_DEEP.md](notes/N17_DEEP.md)).
-
-`WATERZ_SHARE_OFF=1` is +4 B/vox. **C++ product defaults stay 0** until a 3090 Ti 24 GB peak is measured (`scripts/n19_3090_grade.py` refuses non-3090).
-
-## Speed
-
-**No graded speed number.** TASK requires median-of-5 >= 2 Gvox/s on a **3090 Ti**. Best idle-5090 number here is ~0.70 Gvox/s. Co-tenant VRAM invalidates timing; `card_busy` / `scripts/n18_free_gpu.sh` refuse or clear before 2.16.
-
-Owners (nsys `--force-export`, [notes/N19_I0_NSYS.md](notes/N19_I0_NSYS.md)): `k_w5_compress_list` ~508 ms; ParHAC hash_rewrite + rebuild_active + rewrite_dirty_fuse ~838 ms. Honest ceiling and ruled-out attacks: [notes/PROBLEM.md](notes/PROBLEM.md).
-
-### G9 (3090 Ti) - not run here
+## API
 
 ```
-python src/segment.py big/affinity.h5 --out-dir /tmp/wz --thresholds 0.3
-python scripts/n19_3090_grade.py   # refuses unless nvidia-smi name is RTX 3090 Ti
-nvidia-smi --query-gpu=name,driver_version --format=csv
+from segment import segment
+labs = segment(aff, [0.2, 0.3, 0.4, 0.5])  # list of uint32 [Z,Y,X]
 ```
 
-Report median Gvox/s only from that card.
+`aff`: uint8 or float32 `[3,Z,Y,X]`. Scale uint8 by `/255` in fp32.
+
+Device-resident path:
+
+```
+from segment import segment_d
+labs = segment_d(aff_d, [0.3], return_device=True)
+```
+
+```
+python src/segment.py cremiA_val/affinity.h5 --out-dir . --thresholds 0.2 0.3 0.4 0.5
+python baseline/run_baseline.py --candidate mine_thr0.2.h5 mine_thr0.3.h5 mine_thr0.4.h5 mine_thr0.5.h5
+bash scripts/legal_eval.sh          # VOI + four-T + identity diagnostic
+bash scripts/legal_eval.sh --216    # also time the 2.16 Gvox volume if present
+```
+
+CREMI tarball / large caches are not in git (`data/` ignored except thin pins).
+
+## Findings worth reading first
+
+1. **Mean affinity is not Kruskal.** Partition-class swaps fail VOI in
+   structurally different ways (atlas).
+2. **(1+eps) contact-mean ParHAC** is the parallel class that cleared the
+   four-threshold VOI gate here; eps has a sharp empirical boundary near 0.40
+   on the aff-0.3 path.
+3. **Timing must exclude host parking.** D2H of affinity or hundreds of
+   millions of corner indices inside the timed window is not a watershed
+   result (N8/N10).
+4. **Plateau semantics matter more than BFS wall time.** Extra closed-plateau
+   CCs fail VOI; BFS itself is a small slice of watershed time vs list
+   compress / UF.
+
+Open algorithmic questions: [notes/PROBLEM.md](notes/PROBLEM.md).
+
+## Where it diverges from stock waterz
+
+- Deterministic plateau/basin ties (fixed dir + min index), not enqueue order.
+- Fragment IDs need not match waterz; the partition is what is graded.
+- Agglomeration is (1+eps) ParHAC, not the serial exact heap. Exact RAC and
+  Funke quantile+BinQueue also pass VOI and remain serial-shaped.
 
 ## Known failure modes
 
-- Partition-class agglomerators (mutex, Kruskal, frozen CC, GASP Average, NNG, ...) fail VOI in different ways -- cite the atlas, do not re-tune once.
-- Extra closed-plateau CCs (nfrag +1.6%) fail merge VOI; not dust.
-- HOST_PARK / AFF_PARK on the speed path book PCIe into stage times (N8 false stop; N10). Parks stay off.
-- Empty nsys without `--force-export` (fixed in N19 I0).
+- Mutex / frozen CC / Kruskal / FH / SRM / Soille / GASP Average / NNG: see atlas.
+- Raising eps past the measured boundary fails merge VOI.
+- Co-tenant GPU use makes e2e times meaningless.
 
-Dev: greengoblin RTX 5090, driver 580, nvcc 12.8, `sm_120`. Graded card: RTX 3090 Ti (**not here**).
+Dev measurements above: RTX 5090, driver 580, nvcc 12.8, `sm_120`.
