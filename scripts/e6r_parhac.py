@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from _agg_common import (  # noqa: E402
     AFF_THRESHOLDS, CACHE, SO, compile_so, grade_parents, load_rag, stamp,
 )
+from b_dev_aff import nvcc_arch_flags  # noqa: E402
 from task_gate import print_contract  # noqa: E402
 
 NVCC = "/usr/local/cuda-12.8/bin/nvcc"
@@ -26,10 +27,12 @@ DSO = ROOT / "src/libparhac_d.so"
 
 def compile_d():
     src = ROOT / "csrc/parhac_d.cu"
+    if os.environ.get("WATERZ_SKIP_BUILD") == "1" and DSO.is_file():
+        return
     if DSO.exists() and DSO.stat().st_mtime >= src.stat().st_mtime:
         return
     subprocess.check_call([
-        NVCC, "-O3", "-arch=sm_120", "--shared", "-Xcompiler", "-fPIC",
+        NVCC, "-O3", *nvcc_arch_flags(), "--shared", "-Xcompiler", "-fPIC",
         "-o", str(DSO), str(src),
     ])
 

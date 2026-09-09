@@ -2,6 +2,7 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <map>
 #include <cub/cub.cuh>
@@ -160,6 +161,86 @@ __global__ void k_hash_faces(
          fx ? aff[(2 * Z + z) * yx + y * X + x] : 0u);
 }
 
+// R1: tile has y and z extent so a shared table can collapse faces that
+// C1's warp aggregation cannot. A warp still spans 32 consecutive x; the
+// block is 32x4x2 so the same key arriving from neighbouring y or z rows
+// hits one shared slot instead of two global atomic sequences.
+//
+// 1024 slots of 16 B is 16 KB. Overflow falls back to hash_add_warp, so
+// the result is exact either way: integer sums commute, which is the same
+// argument as the isum comment above.
+#define RAG_TX 32
+#define RAG_TY 4
+#define RAG_TZ 2
+#define RAG_TAB 1024
+
+__device__ inline void sh_add(Slot* sh, uint64_t key, uint32_t sum, uint32_t cnt,
+                              Slot* glob, uint64_t cap) {
+    uint64_t h = mix64(key);
+    for (uint64_t t = 0; t < 32; ++t) {
+        uint64_t s = (h + t) & (RAG_TAB - 1);
+        uint64_t old = atomicCAS((unsigned long long*)&sh[s].key, 0ull,
+                                 (unsigned long long)key);
+        if (old == 0ull || old == key) {
+            atomicAdd(&sh[s].isum, sum);
+            atomicAdd(&sh[s].n, cnt);
+            return;
+        }
+    }
+    hash_add_group(glob, cap, key, sum, cnt);
+}
+
+__global__ void k_hash_faces_tiled(
+    const uint32_t* seg, const uint8_t* aff,
+    int64_t Z, int64_t Y, int64_t X,
+    Slot* tab, uint64_t cap)
+{
+    __shared__ Slot sh[RAG_TAB];
+    const int tid = (threadIdx.z * RAG_TY + threadIdx.y) * RAG_TX + threadIdx.x;
+    for (int s = tid; s < RAG_TAB; s += RAG_TX * RAG_TY * RAG_TZ) {
+        sh[s].key = 0;
+        sh[s].isum = 0;
+        sh[s].n = 0;
+    }
+    __syncthreads();
+
+    const int64_t x = (int64_t)blockIdx.x * RAG_TX + threadIdx.x;
+    const int64_t y = (int64_t)blockIdx.y * RAG_TY + threadIdx.y;
+    const int64_t z = (int64_t)blockIdx.z * RAG_TZ + threadIdx.z;
+    const bool ok = (x < X && y < Y && z < Z);
+    const int64_t yx = Y * X;
+    const int64_t i = ok ? (z * Y + y) * X + x : 0;
+    const uint32_t id1 = ok ? seg[i] : 0u;
+    auto emit = [&](bool face, uint32_t id2, uint32_t a) {
+        const bool valid = face && id1 != 0 && id2 != 0 && id1 != id2;
+        const uint32_t lo = id1 < id2 ? id1 : id2;
+        const uint32_t hi = id1 < id2 ? id2 : id1;
+        const uint64_t key = ((uint64_t)lo << 32) | (uint64_t)hi;
+        const uint64_t k = valid ? key : 0ull;
+        const unsigned peers = __match_any_sync(0xffffffffu, k);
+        if (!valid) return;
+        const uint32_t gsum = __reduce_add_sync(peers, a);
+        const uint32_t gcnt = __reduce_add_sync(peers, 1u);
+        const unsigned lane = threadIdx.x & 31u;
+        if (__popc(peers & ((1u << lane) - 1u)) != 0) return;
+        sh_add(sh, key, gsum, gcnt, tab, cap);
+    };
+    const bool fz = ok && z > 0;
+    const bool fy = ok && y > 0;
+    const bool fx = ok && x > 0;
+    emit(fz, fz ? seg[i - yx] : 0u,
+         fz ? aff[(0 * Z + z) * yx + y * X + x] : 0u);
+    emit(fy, fy ? seg[i - X] : 0u,
+         fy ? aff[(1 * Z + z) * yx + y * X + x] : 0u);
+    emit(fx, fx ? seg[i - 1] : 0u,
+         fx ? aff[(2 * Z + z) * yx + y * X + x] : 0u);
+    __syncthreads();
+    for (int s = tid; s < RAG_TAB; s += RAG_TX * RAG_TY * RAG_TZ) {
+        if (sh[s].key != 0 && sh[s].n != 0)
+            hash_add_group(tab, cap, sh[s].key, sh[s].isum, sh[s].n);
+    }
+}
+
 __global__ void k_count_occ(const Slot* tab, uint64_t cap, uint32_t* flags) {
     uint64_t i = blockIdx.x * (uint64_t)blockDim.x + threadIdx.x;
     if (i >= cap) return;
@@ -201,8 +282,18 @@ static int64_t rag_device(
     cudaMalloc(&tab, cap * sizeof(Slot));
     cudaMemset(tab, 0, cap * sizeof(Slot));
     int threads = 256;
-    k_hash_faces<<<vox_grid(Z, Y, X, threads), threads>>>(
-        seg_d, aff_d, Z, Y, X, tab, cap);
+    const char* ra = std::getenv("WATERZ_RAG_ALGO");
+    const int rag_algo = ra ? std::atoi(ra) : 0;
+    if (rag_algo == 1) {
+        dim3 grid((unsigned)((X + RAG_TX - 1) / RAG_TX),
+                  (unsigned)((Y + RAG_TY - 1) / RAG_TY),
+                  (unsigned)((Z + RAG_TZ - 1) / RAG_TZ));
+        k_hash_faces_tiled<<<grid, dim3(RAG_TX, RAG_TY, RAG_TZ)>>>(
+            seg_d, aff_d, Z, Y, X, tab, cap);
+    } else {
+        k_hash_faces<<<vox_grid(Z, Y, X, threads), threads>>>(
+            seg_d, aff_d, Z, Y, X, tab, cap);
+    }
     uint32_t* flags = nullptr;
     cudaMalloc(&flags, cap * 4);
     int b2 = (int)((cap + threads - 1) / threads);

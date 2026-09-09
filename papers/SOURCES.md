@@ -524,11 +524,15 @@ FAIL (0.007 merge slack, 0.029 split gap). P0v counts that residual.
 Not another γ=0.10 serial grade. γ=0.05 α=0.67 was a P0t all-four
 candidate and was never VOI-graded.
 
-## S32 — ParHAC clustered-graph MultiMerge (impl, not a new agglomerator)
+## S32 — ParHAC clustered-graph MultiMerge (read the surrounding paragraphs)
 
-`papers/parhac_dhulipala2022.txt` (arXiv:2206.11654) §2.3 and appendix:
+`papers/parhac_dhulipala2022.txt` / `papers/parhac_dhulipala2022.pdf`
+(arXiv:2206.11654 v1). §2.3 (p.6) is about **ParHAC**:
 
-> "many of these rounds only merge a small number of vertices, and leave
+> "In practice ParHAC can perform a large number of rounds per-layer in
+> the case where ε is small (e.g., ε = 0.01). Although updating the
+> entire graph on each of these rounds is theoretically-efficient …
+> many of these rounds only merge a small number of vertices, and leave
 > the majority of the edges unaffected, and so updating the entire graph
 > each round can be highly wasteful."
 
@@ -536,15 +540,37 @@ candidate and was never VOI-graded.
 > number of merged vertices and their incident neighbors, rather than
 > proportional to the total number of edges in the graph."
 
-> "new implementations using the compressed clustered graph, which only
-> recompute the weights of edges incident to a merge, are between 7–11x
-> faster across the graphs we evaluate."
+Appendix MultiMerge (p.22–23) is the primitive: sequence of (r,b)
+merges, then neighborhood map/reduce. D.3 (p.30–31): ParHAC-CPAM vs
+ParHAC-HT are **the same running time**; CPAM wins **2.9× space**, not
+time.
 
-Official API already cloned:
-`papers/repos/graph-mining/in_memory/clustering/parallel_clustered_graph.h`
-`StarMerge` / `SubgraphMerges`. E6r does the opposite (full
-`compact_and_combine` every inner). E6s ports this contract onto the
-locked ε=0.08 device ContractLayer. Not a new agglomerator.
+The **7–11×** sentence is **not** ParHAC-vs-ParHAC. It is the next
+paragraph, about **Affinity and SCCsim** first written in GBBS (full
+edge-weight recompute every round) vs the same heuristics on the
+clustered graph (p.23):
+
+> "We note that our initial implementations of Affinity and SCCsim were
+> developed in the GBBS framework for static graph processing [32, 36],
+> and did not make use of the compressed clustered graph representation.
+> These initial implementations recomputed the weights of all edges in
+> the graph in each round. We found that our new implementations using
+> the compressed clustered graph, which only recompute the weights of
+> edges incident to a merge, are between 7–11x faster across the graphs
+> we evaluate."
+
+Affinity/SCC ≡ E5 Borůvka (S36), already VOI-FAIL on this RAG.
+Do not treat 7–11× as a ParHAC work target on CREMI-A.
+
+On this RAG, E2 CSR (`g0_agg_ref.py --csr`) **is** MultiMerge: dirty
+walk + splice, parent-identical, visit cut **3.86×**
+(`data/cache/e2_csr_full.json`). Honest stack already credits that
+factor on compact. Layer 0 merges 1.32 M of 1.85 M in 64 outers
+(~20 k merges/outer) — not the paper's "small number of vertices"
+regime (that sentence is for ε=0.01).
+
+E6t StarMerge: VOI-legal, slower than E6s full compact (LOG 3009 vs
+1597). Implementation, not a missing theorem.
 
 ## S33 — per-red prefix accept (ParHAC Alg. 1)
 
@@ -646,4 +672,108 @@ every inner, then filter Gc from the **updated** G.
 
 Dead approximations (do not retry): hash-full-graph + empty-outer-abort;
 skip-combine / keep-ratio-without-merge; Gc-extract-without-updating-G.
+
+## S39 — DynHAC is dynamic TeraHAC, not a static 2× (arXiv:2501.07745)
+
+PDF: `papers/dynhac_yu2025.pdf` (Yu, Dhulipala, Łącki, Parotsidis).
+Read §1–§3, not the abstract alone.
+
+(1+ε) is the Moseley/ParHAC definition (merge within Wmax/(1+ε) of
+the current heaviest). SeqHAC contracts any such edge; ε=0 is exact.
+
+TeraHAC SubgraphHAC **good merge** (DynHAC Def. 2 / TeraHAC Def. 1):
+
+> max(wmax(u), wmax(v)) / min(M(u), M(v), w̄(uv)) ≤ 1+ε
+
+Lemma: any sequence of (1+ε)-good merges is a (1+ε)-approximate
+dendrogram. SubgraphHAC only merges **active** vertices of a partition
+subgraph (partition + neighbors + incident edges). DynHAC reruns
+SubgraphHAC from scratch on dirty partitions after point
+insert/delete. The 423× is vs **recompute-from-scratch per update**,
+not vs one static ParHAC on a fixed RAG.
+
+Not a fused-graph agglomeration cut. Not an implementation target
+unless we first prove a static SubgraphHAC partition of **this** RAG
+is VOI-legal and cheaper than G15. P1 volume tiles are a different
+(already-closed) partition.
+
+## S40 — 24 GB peaks are stage maxima (`scripts/d1_mem.py`)
+
+```
+peak_ws  = aff + seg + ws_scratch     # 42.22 GiB at 2.16 Gvox
+peak_rag = aff + seg + rag_table + wide
+peak_agg = seg + wide + agg           # 23.98 GiB
+```
+
+Affinity dies after RAG; WS scratch is gone before the RAG table
+exists. After W2 stream-aff, overall peak = max(WS', RAG, AGG).
+AGG 23.98 is over 23 GiB usable even if WS lands at 17.22.
+
+## S41 — CUB DeviceRadixSort in/out vs DoubleBuffer tmp (2026-09-06)
+
+CCCL `main` `cub/device/dispatch/dispatch_radix_sort.cuh` onesweep
+`allocation_sizes` (fetched 2026-09-06):
+
+```
+num_portions * num_passes * RADIX_DIGITS * sizeof(OffsetT),  // bins
+max_num_blocks * RADIX_DIGITS * sizeof(AtomicOffsetT),      // lookback
+is_overwrite_okay || num_passes <= 1 ? 0 : num_items * KeySize(),
+is_overwrite_okay || num_passes <= 1 ? 0 : num_items * value_size,
+num_portions * num_passes * sizeof(AtomicOffsetT),          // counters
+```
+
+https://github.com/NVIDIA/cccl/blob/main/cub/cub/device/dispatch/dispatch_radix_sort.cuh
+
+Docs: in/out tmp is `O(N+P)`; DoubleBuffer tmp is `O(P)`
+https://nvidia.github.io/cccl/unstable/cub/api/structcub_1_1DeviceRadixSort.html
+
+Andy Adinets, CUB PR 499: DoubleBuffer “doesn’t allocate any temporary
+storage that’s equal in size to the input buffer”; in==out is a race
+on downsweep and onesweep. https://github.com/NVIDIA/cub/pull/499
+
+Jake Hemstad, CCCL #1148: temp size is implementation-defined; do not
+treat the big-O as a byte budget. https://github.com/NVIDIA/cccl/issues/1148
+
+Measured on greengoblin 5090, nC=61 035 574 (val), parked path
+(`data/cache/b_sort_peak.json`):
+
+```
+tmp_inout = 495 366 143 B (0.461 GiB)
+tmp_dbl   =   7 081 471 B (0.007 GiB)
+extra N   = 488 284 672 B (0.455 GiB = 2 × nC × 4)
+```
+
+Lookback/bins really are ~7 MB at this nC. The val peak before the
+lifetime cuts was flag+vcount+3 nC (2.023 GiB), not the sort tmp.
+After DoubleBuffer + park (`b_dbl_buf.json`) tracked 0.916 GiB,
+2.16 fused pred 21.05 GiB.
+
+## S42 — no unused GPU-HAC work theorem (2026-09-06)
+
+PCBS, Yu et al. 2024, arXiv:2411.10290. `pdftotext`: zero
+GPU/CUDA/device. Defines the same `(1+ε)` rule ParHAC uses; quality
+Pareto is CPU-only.
+
+> "A HAC algorithm is called 1+ε approximate, when each merged pair of
+> clusters has similarity at least W_max / (1+ε)"
+
+https://arxiv.org/pdf/2411.10290
+
+G-kway, Lee et al., TODAES 2025/2026. CUDA Graphs help *uncoarsening
+refinement*, not coarsen/sort+RBK:
+
+> "the number of kernel launches in the coarsening stage is typically
+> small. Therefore, using CUDA Graph does not accelerate the coarsening
+> stage, as its setup overhead outweighs its performance gains."
+
+https://tsung-wei-huang.github.io/papers/2025-TODAES-gkway.pdf
+
+ParHAC official impl is CPAM/C++ on a 72-core CPU, not CUDA
+(NeurIPS 2022 PDF §2.3; https://github.com/ParAlg/ParHAC).
+arXiv `all:ParHAC AND all:GPU` = 0 (queried 2026-09-06).
+cuSLINK is single-linkage MST (arXiv:2306.16354), not this RAG.
+
+N7 compact split (`n7_compact_iou.json`): hash 119.7 ms / scan 43.0 /
+radix 7.7 of 227.4 ms compact. Scan does not dominate. E2 GPU splice
+cannot realize the 3.86× N0 credited on compact.
 

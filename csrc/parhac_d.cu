@@ -1,6 +1,7 @@
 // Device paper-ParHAC ContractLayer, waterz contact-mean, ε=0.08.
 // Live-subgraph compact + combine. Same control flow as parhac_paper_cpu.
 #include <cuda_runtime.h>
+#include <nvtx3/nvToolsExt.h>
 #include <thrust/device_ptr.h>
 #include <thrust/copy.h>
 #include <thrust/sort.h>
@@ -21,6 +22,11 @@
 #include <cmath>
 #include <map>
 
+struct NvRange {
+    explicit NvRange(const char* n) { nvtxRangePushA(n); }
+    ~NvRange() { nvtxRangePop(); }
+};
+
 // Device allocation accounting; see the matching note in ws.cu.
 //
 // Only this file's explicit cudaMalloc calls are counted. thrust allocates its
@@ -29,17 +35,32 @@
 // labelled as such by the reporting script.
 static size_t g_agg_cur = 0;
 static size_t g_agg_peak = 0;
-static std::map<void*, size_t>& agg_book() {
-    static std::map<void*, size_t> m;
+
+struct AggAlloc { size_t bytes; int line; };
+static std::map<void*, AggAlloc>& agg_book() {
+    static std::map<void*, AggAlloc> m;
     return m;
 }
 
-static cudaError_t agg_tracked_malloc(void** p, size_t n) {
+// Which source lines held the memory at the moment of the peak. A single total
+// says the agglomeration wants 17.6 GiB at 2.16 Gvox but not which of the ~30
+// live buffers that is, and narrowing the wrong one saves nothing.
+static std::map<int, size_t>& agg_peak_lines() {
+    static std::map<int, size_t> m;
+    return m;
+}
+
+static cudaError_t agg_tracked_malloc(void** p, size_t n, int line) {
     cudaError_t e = cudaMalloc(p, n);
     if (e == cudaSuccess && *p) {
-        agg_book()[*p] = n;
+        agg_book()[*p] = AggAlloc{n, line};
         g_agg_cur += n;
-        if (g_agg_cur > g_agg_peak) g_agg_peak = g_agg_cur;
+        if (g_agg_cur > g_agg_peak) {
+            g_agg_peak = g_agg_cur;
+            auto& snap = agg_peak_lines();
+            snap.clear();
+            for (const auto& kv : agg_book()) snap[kv.second.line] += kv.second.bytes;
+        }
     }
     return e;
 }
@@ -47,18 +68,71 @@ static cudaError_t agg_tracked_malloc(void** p, size_t n) {
 static cudaError_t agg_tracked_free(void* p) {
     auto it = agg_book().find(p);
     if (it != agg_book().end()) {
-        g_agg_cur -= it->second;
+        g_agg_cur -= it->second.bytes;
         agg_book().erase(it);
     }
     return cudaFree(p);
 }
 
-extern "C" void agg_mem_reset(void) { g_agg_peak = g_agg_cur; }
+static unsigned long long g_n9_dirty_e = 0;
+static unsigned long long g_n9_dirty_u = 0;
+static int g_n9_dirty_n = 0;
+static int g_n9_dirty_e_max = 0;
+static int g_n9_dirty_u_max = 0;
+
+static void n9_dirty_hit(int ndirty, int nunique)
+{
+    if (ndirty < 0) ndirty = 0;
+    if (nunique < 0) nunique = 0;
+    g_n9_dirty_e += (unsigned long long)ndirty;
+    g_n9_dirty_u += (unsigned long long)nunique;
+    g_n9_dirty_n += 1;
+    if (ndirty > g_n9_dirty_e_max) g_n9_dirty_e_max = ndirty;
+    if (nunique > g_n9_dirty_u_max) g_n9_dirty_u_max = nunique;
+}
+
+extern "C" void agg_n9_reset(void) {
+    g_n9_dirty_e = 0;
+    g_n9_dirty_u = 0;
+    g_n9_dirty_n = 0;
+    g_n9_dirty_e_max = 0;
+    g_n9_dirty_u_max = 0;
+}
+
+extern "C" void agg_n9_dirty(
+    unsigned long long* dirty_e, unsigned long long* dirty_u, int* n,
+    int* dirty_e_max, int* dirty_u_max)
+{
+    if (dirty_e) *dirty_e = g_n9_dirty_e;
+    if (dirty_u) *dirty_u = g_n9_dirty_u;
+    if (n) *n = g_n9_dirty_n;
+    if (dirty_e_max) *dirty_e_max = g_n9_dirty_e_max;
+    if (dirty_u_max) *dirty_u_max = g_n9_dirty_u_max;
+}
+
+extern "C" void agg_mem_reset(void) {
+    g_agg_peak = g_agg_cur;
+    agg_peak_lines().clear();
+}
 extern "C" size_t agg_mem_peak(void) { return g_agg_peak; }
 extern "C" size_t agg_mem_cur(void) { return g_agg_cur; }
 
-#define cudaMalloc(p, n) agg_tracked_malloc((void**)(p), (n))
+// Copy out the peak breakdown: line numbers and bytes, largest first is left to
+// the caller. Returns how many entries exist, so a short buffer is detectable.
+extern "C" int agg_mem_peak_lines(int* lines, size_t* bytes, int cap) {
+    const auto& snap = agg_peak_lines();
+    int i = 0;
+    for (const auto& kv : snap) {
+        if (i < cap) { lines[i] = kv.first; bytes[i] = kv.second; }
+        ++i;
+    }
+    return i;
+}
+
+#define cudaMalloc(p, n) agg_tracked_malloc((void**)(p), (n), __LINE__)
 #define cudaFree(p) agg_tracked_free((void*)(p))
+
+#include <cub/cub.cuh>
 
 struct KeepOn {
     __host__ __device__ bool operator()(uint8_t k) const { return k != 0; }
@@ -86,6 +160,19 @@ __global__ void k_compress(uint32_t* parent, int nnode)
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= nnode) return;
     parent[i] = dfind(parent, (uint32_t)i);
+}
+
+// V2: drop the sz[red] >= sz[blue] propose predicate. Default on, matching
+// the locked fingerprint. WATERZ_SIZE_ASYM=0 is the accuracy-affecting
+// lever; it is off the G bitmask on purpose.
+static __device__ int d_size_asym = 1;
+
+static void set_size_asym_from_env()
+{
+    int v = 1;
+    if (const char* s = std::getenv("WATERZ_SIZE_ASYM"))
+        v = std::atoi(s) != 0;
+    cudaMemcpyToSymbol(d_size_asym, &v, sizeof(int));
 }
 
 __global__ void k_init_parent(uint32_t* parent, uint32_t* sz, int nnode)
@@ -331,7 +418,7 @@ __global__ void k_propose(
     uint32_t bl = (ca == 1) ? b : a;
     (void)color;
     if (frozen[r]) return;
-    if (sz[r] < sz[bl]) return;
+    if (d_size_asym && sz[r] < sz[bl]) return;
     if (dbg) atomicAdd(dbg + 4, 1);
     unsigned long long pack =
         ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
@@ -358,7 +445,7 @@ __global__ void k_propose_list(
     uint32_t r = (ca == 1) ? a : b;
     uint32_t bl = (ca == 1) ? b : a;
     if (frozen[r]) return;
-    if (sz[r] < sz[bl]) return;
+    if (d_size_asym && sz[r] < sz[bl]) return;
     unsigned long long pack =
         ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
         | (unsigned long long)r;
@@ -428,6 +515,104 @@ __global__ void k_pack_prop_fused(
     key[slot] = ((unsigned long long)r << 32)
               | (unsigned long long)(0x7fffffffu - pri);
     pay[slot] = ((unsigned long long)i << 32) | (unsigned long long)sz[i];
+}
+
+// G3, blue-list half. k_propose plus a record of which blues were proposed to,
+// and the fused pack restricted to that record.
+//
+// k_pack_prop_fused scans all nnode dprop slots to collect a mean of 2584
+// winners, which is 12 B x 26.1 M per inner iteration at the graded volume to
+// find 0.01% of it. The set it is looking for is exactly the blues that
+// k_propose wrote, and k_propose can say so for free: an entry is only ever
+// raised from zero by atomicMax, so the thread that observes old == 0 is the
+// unique first writer of that blue and can append it to a list.
+//
+// Bit-identical, not approximately so. The list is the exact support of the
+// non-zero dprop entries, so the packed set is the same set. Its ORDER differs,
+// but so does the order the existing kernel produces: both assign output slots
+// by atomicAdd, and the radix sort that follows is keyed on
+// (red, 0x7fffffff - priority) where the priority is a 31-bit hash of the
+// canonical root pair. Order therefore only matters for exact key ties, which
+// need a hash collision within one red's group, and the existing path is
+// equally exposed to those. a2_determinism.json records byte-identical output
+// across runs, so they do not occur here.
+//
+// Deliberately separate kernels rather than a nullptr branch inside k_propose:
+// k_propose is the one kernel already measured to be at roofline (77 ms of
+// 5809), and it is not worth spending a register on it to save thirty lines.
+__global__ void k_propose_bluelist(
+    const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
+    uint32_t* parent, const uint32_t* sz, const uint8_t* frozen,
+    int64_t n, double TL, unsigned long long* prop,
+    uint32_t* blist, int* nlist,
+    uint64_t seed, uint64_t cseed, int* nabove)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    int above = 0;
+    uint32_t a = 0, b = 0;
+    if (i < n && ct[i] >= 1) {
+        double mean = sm[i] / (double)ct[i];
+        if (mean >= TL) {
+            a = dfind_nocomp(parent, u[i]);
+            b = dfind_nocomp(parent, v[i]);
+            if (a != b && a != 0 && b != 0) above = 1;
+        }
+    }
+    // Same block-aggregated count as k_propose, and for the same reason: the
+    // layer-exit test needs it and a per-thread atomic would dominate.
+    if (nabove) {
+        __shared__ int sh_above;
+        if (threadIdx.x == 0) sh_above = 0;
+        __syncthreads();
+        if (above) atomicAdd(&sh_above, 1);
+        __syncthreads();
+        if (threadIdx.x == 0 && sh_above) atomicAdd(nabove, sh_above);
+    }
+    if (!above) return;
+    uint8_t ca = color_of(a, cseed);
+    uint8_t cb = color_of(b, cseed);
+    if (ca == cb) return;
+    uint32_t r = (ca == 1) ? a : b;
+    uint32_t bl = (ca == 1) ? b : a;
+    if (frozen[r]) return;
+    if (d_size_asym && sz[r] < sz[bl]) return;
+    unsigned long long pack =
+        ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
+        | (unsigned long long)r;
+    unsigned long long old = atomicMax(&prop[bl], pack);
+    if (old == 0) {
+        blist[atomicAdd(nlist, 1)] = bl;
+    }
+}
+
+// The k_pack_prop_fused body over the recorded blues instead of over nnode.
+// Clearing prop[b] here preserves the invariant the loop relies on, that dprop
+// arrives empty at the next propose without ever being memset.
+// Grid-stride over the list, so the launch can be a small fixed grid. Sizing it
+// from the count would need a device-to-host copy between propose and pack, and
+// the whole point is to stop touching nnode-sized things per inner iteration.
+__global__ void k_pack_listed_fused(
+    const uint32_t* blist, const int* nlist_d, unsigned long long* prop,
+    const uint32_t* sz, unsigned long long* key, unsigned long long* pay,
+    int* nprop)
+{
+    const int nlist = nlist_d ? *nlist_d : 0;
+    const int stride = gridDim.x * blockDim.x;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < nlist;
+         i += stride) {
+        uint32_t b = blist[i];
+        if (b == 0) continue;
+        unsigned long long p = prop[b];
+        if (p == 0) continue;
+        prop[b] = 0;
+        uint32_t r = (uint32_t)(p & 0xffffffffull);
+        if (r == 0) continue;
+        unsigned pri = (unsigned)(p >> 32) & 0x7fffffffu;
+        int slot = atomicAdd(nprop, 1);
+        key[slot] = ((unsigned long long)r << 32)
+                  | (unsigned long long)(0x7fffffffu - pri);
+        pay[slot] = ((unsigned long long)b << 32) | (unsigned long long)sz[b];
+    }
 }
 
 // One-launch proposal sort for the common small case. A 64-bit CUB device
@@ -575,6 +760,20 @@ __global__ void k_mark_acc_blue(
     dirty_star[r] = 1;
 }
 
+__global__ void k_unmark_acc_blue(
+    const uint32_t* blues, const uint32_t* reds, int nprop, const uint32_t* parent,
+    uint8_t* dirty_blue, uint8_t* dirty_star)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nprop) return;
+    uint32_t b = blues[i];
+    uint32_t r = reds[i];
+    if (b == 0 || parent[b] == b) return;
+    dirty_blue[b] = 0;
+    dirty_star[b] = 0;
+    dirty_star[r] = 0;
+}
+
 __global__ void k_count_dirty_edges(
     const uint32_t* u, const uint32_t* v, const int64_t* ct, int64_t n,
     const uint8_t* dirty_blue, const uint8_t* dirty_star, int* n_blue, int* n_star)
@@ -584,6 +783,314 @@ __global__ void k_count_dirty_edges(
     uint32_t a = u[i], b = v[i];
     if (dirty_blue[a] || dirty_blue[b]) atomicAdd(n_blue, 1);
     if (dirty_star[a] || dirty_star[b]) atomicAdd(n_star, 1);
+}
+
+// ---------------------------------------------------------------------------
+// G2: rewrite and combine only the dirty edges, leave the rest in place.
+// ---------------------------------------------------------------------------
+//
+// hash_combine_live inserts every live edge into the table every inner
+// iteration. The collision lemma in scripts/g0_agg_ref.py is that a
+// parallel-edge collision can only occur between two dirty edges -- a
+// non-dirty edge has both endpoints unchanged, so its key cannot meet a
+// rewritten one unless that rewritten one is also incident to a dirty
+// endpoint, in which case it is dirty too. Combined with k_scale_sm_bytes
+// (sums are exact integers, so atomicAdd commutes), restricting the table
+// to the dirty set is therefore bit-identical, not approximate.
+//
+// The CPU replica finds that set by a masked scan of the alive edges, not
+// by walking a CSR: after the first rewrite, u,v hold current roots, and
+// the dirty flags are on this inner's merged blues and receiving reds,
+// which are also roots. A CSR built at layer entry would be indexed by
+// then-current endpoints and would miss an edge that was rewritten onto a
+// dirty root in an earlier inner, unless it was rebuilt or spliced. The
+// scan of current endpoints is the same selection the replica uses and
+// does not have that bug. k_deg / k_scatter_adj stay available for a
+// later splice; they are not what makes this pass correct.
+//
+// Dead slots are marked ct = 0. Physical compaction stays at layer entry
+// (compact_radix already skips ct < 1). nscan is the high-water mark the
+// subsequent propose / wmax / compact_radix have to cover; nlive is the
+// count of ct >= 1, which is what the nlive trace records.
+
+__global__ void k_rewrite_dirty(
+    uint32_t* u, uint32_t* v, int64_t* ct, const uint32_t* parent,
+    const uint8_t* dirty, int64_t n, uint8_t* keep)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    keep[i] = 0;
+    if (ct[i] < 1) return;
+    uint32_t a = u[i], b = v[i];
+    if (!dirty[a] && !dirty[b]) return;
+    a = dfind_nocomp(parent, a);
+    b = dfind_nocomp(parent, b);
+    if (a == b || a == 0 || b == 0) {
+        ct[i] = 0;
+        return;
+    }
+    if (a > b) {
+        uint32_t t = a;
+        a = b;
+        b = t;
+    }
+    u[i] = a;
+    v[i] = b;
+    keep[i] = 1;
+}
+
+// N15 exp6: record vacated (keep) slots as holes during rewrite so
+// k_count_u8 and k_list_holes are not separate O(nscan) launches.
+__global__ void k_rewrite_dirty_fuse(
+    uint32_t* u, uint32_t* v, int64_t* ct, const uint32_t* parent,
+    const uint8_t* dirty, int64_t n, uint8_t* keep,
+    uint32_t* holes, int* nhole, int* nself)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    keep[i] = 0;
+    if (ct[i] < 1) return;
+    uint32_t a = u[i], b = v[i];
+    if (!dirty[a] && !dirty[b]) return;
+    a = dfind_nocomp(parent, a);
+    b = dfind_nocomp(parent, b);
+    if (a == b || a == 0 || b == 0) {
+        ct[i] = 0;
+        if (nself) atomicAdd(nself, 1);
+        return;
+    }
+    if (a > b) {
+        uint32_t t = a;
+        a = b;
+        b = t;
+    }
+    u[i] = a;
+    v[i] = b;
+    keep[i] = 1;
+    int s = atomicAdd(nhole, 1);
+    holes[s] = (uint32_t)i;
+}
+
+__global__ void k_vacate_kept(int64_t* ct, const uint8_t* keep, int64_t n)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i < n && keep[i]) ct[i] = 0;
+}
+
+__global__ void k_list_holes(const int64_t* ct, int64_t n,
+                             uint32_t* holes, int* nhole)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n || ct[i] >= 1) return;
+    int s = atomicAdd(nhole, 1);
+    holes[s] = (uint32_t)i;
+}
+
+__global__ void k_fill_holes(
+    const uint32_t* su, const uint32_t* sv, const double* ssm, const int64_t* sct,
+    const uint32_t* holes, int nfill,
+    uint32_t* u, uint32_t* v, double* sm, int64_t* ct)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= nfill) return;
+    uint32_t d = holes[j];
+    u[d] = su[j];
+    v[d] = sv[j];
+    sm[d] = ssm[j];
+    ct[d] = sct[j];
+}
+
+__global__ void k_count_live(const int64_t* ct, int64_t n, int* nout)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i < n && ct[i] >= 1) atomicAdd(nout, 1);
+}
+
+// G3: propose over an explicit edge list (the active set), not [0, nscan).
+__global__ void k_propose_listed(
+    const uint32_t* elist, int nlist,
+    const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
+    uint32_t* parent, const uint32_t* sz, const uint8_t* frozen,
+    double TL, unsigned long long* prop, uint32_t* blist, int* nblist,
+    uint64_t seed, uint64_t cseed, int* nabove)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    int above = 0;
+    uint32_t a = 0, b = 0;
+    if (t < nlist) {
+        uint32_t i = elist[t];
+        if (ct[i] >= 1) {
+            double mean = sm[i] / (double)ct[i];
+            if (mean >= TL) {
+                a = dfind_nocomp(parent, u[i]);
+                b = dfind_nocomp(parent, v[i]);
+                if (a != b && a != 0 && b != 0) above = 1;
+            }
+        }
+    }
+    if (nabove) {
+        __shared__ int sh;
+        if (threadIdx.x == 0) sh = 0;
+        __syncthreads();
+        if (above) atomicAdd(&sh, 1);
+        __syncthreads();
+        if (threadIdx.x == 0 && sh) atomicAdd(nabove, sh);
+    }
+    if (!above) return;
+    uint8_t ca = color_of(a, cseed);
+    uint8_t cb = color_of(b, cseed);
+    if (ca == cb) return;
+    uint32_t r = (ca == 1) ? a : b;
+    uint32_t bl = (ca == 1) ? b : a;
+    if (frozen[r]) return;
+    if (d_size_asym && sz[r] < sz[bl]) return;
+    unsigned long long pack =
+        ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
+        | (unsigned long long)r;
+    unsigned long long old = atomicMax(&prop[bl], pack);
+    if (blist && old == 0 && pack != 0) {
+        int slot = atomicAdd(nblist, 1);
+        blist[slot] = bl;
+    }
+}
+
+__global__ void k_rebuild_active(
+    const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
+    const uint8_t* keep, const uint8_t* dirty, int64_t n, double TL,
+    uint32_t* alist, int* nact, uint8_t* amask)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    // A non-dirty live edge cannot have crossed TL: only a dirty edge's
+    // mean changes. So this kernel only touches dirty slots, and the
+    // caller is expected to have dropped the vacated ones from amask
+    // already. keep==1 is a dirty survivor whose new mean we re-test;
+    // keep==0 and dirty endpoints with ct==0 is a dead slot we drop.
+    uint32_t a = u[i], b = v[i];
+    const bool was = dirty[a] || dirty[b] || keep[i];
+    if (!was) return;
+    if (ct[i] < 1) {
+        amask[i] = 0;
+        return;
+    }
+    const uint8_t on = (sm[i] / (double)ct[i] >= TL) ? 1 : 0;
+    amask[i] = on;
+}
+
+__global__ void k_pack_amask(const uint8_t* amask, const int64_t* ct,
+                             int64_t n, uint32_t* alist, int* nact)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n || !amask[i] || ct[i] < 1) return;
+    int s = atomicAdd(nact, 1);
+    alist[s] = (uint32_t)i;
+}
+
+__global__ void k_rebuild_pack(
+    const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
+    const uint8_t* keep, const uint8_t* dirty, int64_t n, double TL,
+    uint32_t* alist, int* nact, uint8_t* amask)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    uint32_t a = u[i], b = v[i];
+    const bool was = dirty[a] || dirty[b] || keep[i];
+    if (!was) {
+        if (amask[i] && ct[i] >= 1) {
+            int s = atomicAdd(nact, 1);
+            alist[s] = (uint32_t)i;
+        }
+        return;
+    }
+    if (ct[i] < 1) {
+        amask[i] = 0;
+        return;
+    }
+    const uint8_t on = (sm[i] / (double)ct[i] >= TL) ? 1 : 0;
+    amask[i] = on;
+    if (on) {
+        int s = atomicAdd(nact, 1);
+        alist[s] = (uint32_t)i;
+    }
+}
+
+__global__ void k_init_amask(const double* sm, const int64_t* ct,
+                             int64_t n, double TL, uint8_t* amask)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i >= n) return;
+    amask[i] = (ct[i] >= 1 && sm[i] / (double)ct[i] >= TL) ? 1 : 0;
+}
+
+// G4: listed variants of the per-outer node passes.
+__global__ void k_flag_roots(const uint32_t* parent, int nnode, uint32_t* flag)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nnode) return;
+    flag[i] = (i != 0 && parent[i] == (uint32_t)i) ? 1u : 0u;
+}
+
+__global__ void k_scatter_roots(const uint32_t* ps, uint32_t last_f,
+                                uint32_t* roots, int nnode)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= nnode) return;
+    uint32_t here = ps[i];
+    bool is = (i + 1 < nnode) ? (ps[i + 1] > here) : (last_f != 0);
+    if (is) roots[here] = (uint32_t)i;
+}
+
+__global__ void k_zero_sz_list(uint32_t* sz, const uint32_t* roots, int n)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t < n) sz[roots[t]] = 0;
+}
+
+__global__ void k_copy_sz_list(const uint32_t* sz, uint32_t* sz0,
+                               const uint32_t* roots, int n)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t < n) sz0[roots[t]] = sz[roots[t]];
+}
+
+__global__ void k_clear_frozen_list(uint8_t* frozen, const uint32_t* roots, int n)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t < n) frozen[roots[t]] = 0;
+}
+
+__global__ void k_compress_list(uint32_t* parent, const uint32_t* list, int n)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    uint32_t i = list[t];
+    parent[i] = dfind(parent, i);
+}
+
+__global__ void k_init_root_list(uint32_t* roots, int nnode)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i + 1 >= nnode) return;
+    roots[i] = (uint32_t)(i + 1);
+}
+
+__global__ void k_compact_roots(
+    const uint32_t* in, uint32_t* out, const uint32_t* parent,
+    int n, int* nout)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    uint32_t r = in[t];
+    if (r != 0 && parent[r] == r) {
+        int s = atomicAdd(nout, 1);
+        out[s] = r;
+    }
+}
+
+__global__ void k_count_u8(const uint8_t* a, int64_t n, int* nout)
+{
+    int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    if (i < n && a[i]) atomicAdd(nout, 1);
 }
 
 // --- E6t: official StarMerge (walk blues only, InsertOrUpdate) ---
@@ -740,7 +1247,7 @@ __global__ void k_propose_eid(
     uint32_t r = (ca == 1) ? a : b;
     uint32_t bl = (ca == 1) ? b : a;
     if (frozen[r]) return;
-    if (sz[r] < sz[bl]) return;
+    if (d_size_asym && sz[r] < sz[bl]) return;
     unsigned long long pack =
         ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
         | (unsigned long long)r;
@@ -772,7 +1279,7 @@ __global__ void k_propose_eid_list(
     uint32_t r = (ca == 1) ? a : b;
     uint32_t bl = (ca == 1) ? b : a;
     if (frozen[r]) return;
-    if (sz[r] < sz[bl]) return;
+    if (d_size_asym && sz[r] < sz[bl]) return;
     unsigned long long pack =
         ((unsigned long long)prop_pri_bits(seed, a, b, r) << 32)
         | (unsigned long long)r;
@@ -1155,11 +1662,54 @@ __global__ void k_add_touched_gc(
 }
 
 // Hash-combine live edges (S32 MultiMerge substitute: no full sort).
+// 16 bytes, not 24. This table is the single largest allocation the
+// agglomeration makes - next_pow2(2*n_edges) slots, 83 B/edge measured, 40% of
+// the tracked peak - so a third off it is 2.4 GiB at 2.16 Gvox.
+//
+// Narrowing is exact, not an approximation. sm arrives already rescaled to a
+// whole number of affinity bytes by the llround at the top of the layer, and ct
+// is a face count, so both accumulators are integers and both atomicAdds are
+// exact integer sums in either width. The only thing uint32 gives up is range:
+// sm <= 255*ct overflows past 16.8 M faces on one contact. That is not provable
+// at 2.16 Gvox, so k_hash_insert checks each add against the width instead of
+// assuming, and the caller reports it - the same discipline rag.cu already uses
+// for its own isum.
+// Build with -DHSLOT_WIDE for the original 24-byte slot. That is what the
+// overflow message tells you to do, and it is how the narrowing was gated:
+// both widths built from this one source and their labels compared.
+#ifdef HSLOT_WIDE
+using hsm_t = double;
+using hct_t = unsigned long long;
+#else
+using hsm_t = uint32_t;
+using hct_t = uint32_t;
+#endif
+
 struct HSlot {
     unsigned long long key;
-    double sm;
-    unsigned long long ct;
+    hsm_t sm;
+    hct_t ct;
 };
+
+// Bits in the hash overflow flag, so a probe-limit failure and an arithmetic
+// one stay distinguishable instead of one overwriting the other.
+enum { HOVF_PROBE = 1, HOVF_WIDTH = 2 };
+
+// Did this contribution exceed the slot's width? Checks the incoming value as
+// well as the sum, since a value already past uint32 would be lost on the cast
+// rather than on the add. Always false for the wide slot, which cannot wrap at
+// any volume that fits in memory.
+static inline __device__ bool hslot_would_wrap(
+    hsm_t olds, hsm_t adds, hct_t oldc, hct_t addc, double smd, int64_t cti)
+{
+#ifdef HSLOT_WIDE
+    (void)olds; (void)adds; (void)oldc; (void)addc; (void)smd; (void)cti;
+    return false;
+#else
+    return smd < 0.0 || smd > 4294967295.0 || cti > 4294967295ll
+        || olds > 0xffffffffu - adds || oldc > 0xffffffffu - addc;
+#endif
+}
 
 static inline __device__ unsigned long long edge_key(uint32_t u, uint32_t v)
 {
@@ -1210,19 +1760,132 @@ __global__ void k_hash_insert(
     unsigned long long h = hmix64(key);
     int mask = ntab - 1;
     int slot = (int)(h & (unsigned long long)mask);
+    // sm is integral here but arrives as a double, so a value already past the
+    // uint32 range would truncate on the cast rather than on the add.
+    const double smd = sm[i];
+    const int64_t cti = ct[i];
+    const hsm_t adds = (hsm_t)smd;
+    const hct_t addc = (hct_t)cti;
     for (int s = 0; s < 128; ++s) {
         int idx = (slot + s) & mask;
         unsigned long long old = atomicCAS(&tab[idx].key, 0ull, key);
         if (old == 0 || old == key) {
-            atomicAdd(&tab[idx].sm, sm[i]);
-            atomicAdd(&tab[idx].ct, (unsigned long long)ct[i]);
+            // atomicAdd returns the pre-add value, so wraparound is detectable
+            // without a second read and without serialising the update.
+            const hsm_t olds = atomicAdd(&tab[idx].sm, adds);
+            const hct_t oldc = atomicAdd(&tab[idx].ct, addc);
+            if (ovf && hslot_would_wrap(olds, adds, oldc, addc, smd, cti))
+                atomicOr(ovf, HOVF_WIDTH);
             return;
         }
     }
     // Falling out of the probe loop would drop the edge silently, which is a
     // wrong answer rather than a slow one. The table is kept at load factor
     // <= 0.5 so this should never fire, and the caller checks the flag.
-    if (ovf) atomicExch(ovf, 1);
+    if (ovf) atomicOr(ovf, HOVF_PROBE);
+}
+
+static inline __device__ void hslot_insert(
+    HSlot* tab, int ntab, unsigned long long key,
+    hsm_t adds, hct_t addc, double smd, int64_t cti, int* ovf)
+{
+    unsigned long long h = hmix64(key);
+    int mask = ntab - 1;
+    int slot = (int)(h & (unsigned long long)mask);
+    for (int s = 0; s < 128; ++s) {
+        int idx = (slot + s) & mask;
+        unsigned long long old = atomicCAS(&tab[idx].key, 0ull, key);
+        if (old == 0 || old == key) {
+            const hsm_t olds = atomicAdd(&tab[idx].sm, adds);
+            const hct_t oldc = atomicAdd(&tab[idx].ct, addc);
+            if (ovf && hslot_would_wrap(olds, adds, oldc, addc, smd, cti))
+                atomicOr(ovf, HOVF_WIDTH);
+            return;
+        }
+    }
+    if (ovf) atomicOr(ovf, HOVF_PROBE);
+}
+
+// Dirty-path insert: warp-aggregate equal keys (C1), then a 512-slot
+// shared table, then one global CAS per surviving group. Integer sums,
+// so the combined (sm, ct) equals a per-thread CAS of the same edges.
+#ifndef HASH_SH
+#define HASH_SH 512
+#endif
+
+__global__ void k_hash_insert_dirty(
+    const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
+    const uint8_t* keep, int64_t n, HSlot* tab, int ntab, int* ovf)
+{
+    __shared__ unsigned long long sh_key[HASH_SH];
+    __shared__ hsm_t sh_sm[HASH_SH];
+    __shared__ hct_t sh_ct[HASH_SH];
+    const int tid = threadIdx.x;
+    const int nthr = blockDim.x;
+    for (int s = tid; s < HASH_SH; s += nthr) {
+        sh_key[s] = 0;
+        sh_sm[s] = 0;
+        sh_ct[s] = 0;
+    }
+    __syncthreads();
+
+    const int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
+    const bool in = (i < n);
+    uint32_t a = 0, b = 0;
+    bool valid = in && keep[i] && ct[i] >= 1;
+    if (valid) {
+        a = u[i];
+        b = v[i];
+        if (a > b) {
+            uint32_t t = a;
+            a = b;
+            b = t;
+        }
+        valid = a != 0 && b != 0 && a != b;
+    }
+    const unsigned long long key = valid ? edge_key(a, b) : 0ull;
+    const unsigned peers = __match_any_sync(0xffffffffu, key);
+    hsm_t adds = 0;
+    hct_t addc = 0;
+    double smd = 0.0;
+    int64_t cti = 0;
+    bool lead = false;
+    if (valid) {
+        smd = sm[i];
+        cti = ct[i];
+        adds = (hsm_t)smd;
+        addc = (hct_t)cti;
+        adds = (hsm_t)__reduce_add_sync(peers, (unsigned)adds);
+        addc = (hct_t)__reduce_add_sync(peers, (unsigned)addc);
+        const unsigned lane = threadIdx.x & 31u;
+        lead = __popc(peers & ((1u << lane) - 1u)) == 0;
+        smd = (double)adds;
+        cti = (int64_t)addc;
+    }
+    bool in_sh = false;
+    if (lead) {
+        unsigned long long h = hmix64(key);
+        int mask = HASH_SH - 1;
+        int slot = (int)(h & (unsigned long long)mask);
+        for (int s = 0; s < 16; ++s) {
+            int idx = (slot + s) & mask;
+            unsigned long long old = atomicCAS(&sh_key[idx], 0ull, key);
+            if (old == 0 || old == key) {
+                atomicAdd(&sh_sm[idx], adds);
+                atomicAdd(&sh_ct[idx], addc);
+                in_sh = true;
+                break;
+            }
+        }
+    }
+    __syncthreads();
+    for (int s = tid; s < HASH_SH; s += nthr) {
+        if (sh_key[s] != 0 && sh_ct[s] > 0)
+            hslot_insert(tab, ntab, sh_key[s], sh_sm[s], sh_ct[s],
+                         (double)sh_sm[s], (int64_t)sh_ct[s], ovf);
+    }
+    if (lead && !in_sh)
+        hslot_insert(tab, ntab, key, adds, addc, smd, cti, ovf);
 }
 
 __global__ void k_hash_count(const HSlot* tab, int ntab, int* nout)
@@ -1252,8 +1915,8 @@ __global__ void k_hash_emit(
     if (i >= ntab) return;
     const unsigned long long key = tab[i].key;
     if (key == 0) return;
-    const double s = tab[i].sm;
-    const unsigned long long c = tab[i].ct;
+    const hsm_t s = tab[i].sm;
+    const hct_t c = tab[i].ct;
     tab[i].key = 0;
     tab[i].sm = 0;
     tab[i].ct = 0;
@@ -1261,8 +1924,46 @@ __global__ void k_hash_emit(
     int slot = atomicAdd(nout, 1);
     u[slot] = (uint32_t)(key >> 32);
     v[slot] = (uint32_t)(key & 0xffffffffull);
-    sm[slot] = s;
+    sm[slot] = (double)s;
     ct[slot] = (int64_t)c;
+}
+
+// N17: emit combined dirty edges into the keep-holes from rewrite.
+// Tail holes (m..nhole) stay vacated. Skips k_vacate_kept O(nscan) + k_fill_holes.
+__global__ void k_hash_emit_holes(
+    HSlot* tab, int ntab, const uint32_t* holes, int nhole,
+    uint32_t* u, uint32_t* v, double* sm, int64_t* ct,
+    int* nout, int* ovf)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= ntab) return;
+    const unsigned long long key = tab[i].key;
+    if (key == 0) return;
+    const hsm_t s = tab[i].sm;
+    const hct_t c = tab[i].ct;
+    tab[i].key = 0;
+    tab[i].sm = 0;
+    tab[i].ct = 0;
+    if (c == 0) return;
+    int slot = atomicAdd(nout, 1);
+    if (slot >= nhole) {
+        if (ovf) atomicExch(ovf, 1);
+        return;
+    }
+    const uint32_t d = holes[slot];
+    u[d] = (uint32_t)(key >> 32);
+    v[d] = (uint32_t)(key & 0xffffffffull);
+    sm[d] = (double)s;
+    ct[d] = (int64_t)c;
+}
+
+__global__ void k_zero_hole_tail(
+    const uint32_t* holes, int m, int nhole, int64_t* ct)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    const int src = m + j;
+    if (src >= nhole) return;
+    ct[holes[src]] = 0;
 }
 
 __global__ void k_freeze(uint32_t* parent, uint32_t* sz, const uint32_t* sz0,
@@ -1322,6 +2023,20 @@ static int compact_and_combine(
 }
 
 static int next_pow2(int x);
+
+static int hash_dedup_on()
+{
+    const char* s = std::getenv("WATERZ_HASH_DEDUP");
+    return s ? std::atoi(s) : 1;
+}
+
+// CUB SortPairs + ReduceByKey on a compacted dirty set. Defined after
+// k_key_from_sel / k_gather_smct / k_unpack_uvkey.
+static int dirty_rbk(
+    uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
+    int64_t n, int ndirty_e, int* n_live, int be, int threads,
+    uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
+    uint32_t* dholes, int* dnhole, int* dnout);
 
 // Deduplicate the live edge list with a hash table instead of a sort.
 //
@@ -1388,6 +2103,230 @@ static int hash_combine_live(
     return 1;
 }
 
+// G2 inner compaction. n is the scan length (holes included). Combined
+// dirty edges are written back into vacated slots. n_live is the count of
+// ct >= 1 afterwards; the scan length does not shrink.
+static bool fuse_dirty() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_FUSE_DIRTY");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N15 exp8: keep sz0 from the first outer of the layer. ε stays 0.40.
+static bool sticky_sz0() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_STICKY_SZ0");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N16 T7: nlive = nlive_in - nself - ndirty + m. Requires fuse. Default off.
+static bool nlive_arith() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_NLIVE_ARITH");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N16 T15: one kernel writes amask and packs alist. Default off.
+static bool fuse_pack() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_FUSE_PACK");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N17: emit into rewrite holes; skip vacate+fill. Requires fuse. Default off.
+static bool emit_holes() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_EMIT_HOLES");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N17: unmark last inner's blues/reds instead of memset nnode. Default off.
+static bool dirty_unmark() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_DIRTY_UNMARK");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+static int hash_combine_dirty(
+    uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
+    uint32_t* dparent, const uint8_t* dirty, int64_t n, int nlive_in, int* n_live,
+    int be, int threads,
+    uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
+    uint32_t* dholes, int* dnhole,
+    HSlot* dtab, int ntab, int* dnout, int* dovf,
+    double* scan_acc = nullptr, double* hash_acc = nullptr)
+{
+    cudaEvent_t ea, eb;
+    if (scan_acc || hash_acc) {
+        cudaEventCreate(&ea);
+        cudaEventCreate(&eb);
+    }
+    if (scan_acc) cudaEventRecord(ea);
+    int ndirty_e = 0;
+    int nself = 0;
+    const bool fuse = fuse_dirty();
+    const bool arith = fuse && nlive_arith() && nlive_in >= 0;
+    {
+        NvRange nv("hash_rewrite");
+        if (fuse) {
+            cudaMemset(dnhole, 0, 4);
+            cudaMemset(dnout, 0, 4);
+            k_rewrite_dirty_fuse<<<be, threads>>>(
+                du, dv, dct, dparent, dirty, n, dkeep, dholes, dnhole, dnout);
+            cudaMemcpy(&ndirty_e, dnhole, 4, cudaMemcpyDeviceToHost);
+            cudaMemcpy(&nself, dnout, 4, cudaMemcpyDeviceToHost);
+        } else {
+            k_rewrite_dirty<<<be, threads>>>(du, dv, dct, dparent, dirty, n, dkeep);
+            cudaMemset(dnout, 0, 4);
+            k_count_u8<<<be, threads>>>(dkeep, n, dnout);
+            cudaMemcpy(&ndirty_e, dnout, 4, cudaMemcpyDeviceToHost);
+        }
+    }
+    if (scan_acc) {
+        cudaEventRecord(eb);
+        cudaEventSynchronize(eb);
+        float ms = 0;
+        cudaEventElapsedTime(&ms, ea, eb);
+        *scan_acc += (double)ms;
+    }
+    if (ndirty_e <= 0) {
+        n9_dirty_hit(0, 0);
+        if (arith) {
+            *n_live = nlive_in - nself;
+            if (*n_live < 0) *n_live = 0;
+        } else {
+            cudaMemset(dnout, 0, 4);
+            k_count_live<<<be, threads>>>(dct, n, dnout);
+            cudaMemcpy(n_live, dnout, 4, cudaMemcpyDeviceToHost);
+        }
+        if (scan_acc || hash_acc) {
+            cudaEventDestroy(ea);
+            cudaEventDestroy(eb);
+        }
+        return 1;
+    }
+    // Size the table from the dirty set, not from nscan. Emit scans the
+    // table, so a table sized for the live array would reintroduce the
+    // traffic this lever exists to drop.
+    if (hash_acc) cudaEventRecord(ea);
+    const bool dedup = hash_dedup_on();
+    if (dedup && ndirty_e < 32768 && !emit_holes()) {
+        dirty_rbk(du, dv, dsm, dct, dkeep, n, ndirty_e, n_live,
+                  be, threads, tu, tv, tsm, tct, dholes, dnhole, dnout);
+        // n9_dirty_hit is inside dirty_rbk (hm vs unique m).
+    } else {
+    int ntab_use = next_pow2(ndirty_e * 2 + 1024);
+    if (ntab_use > ntab) ntab_use = ntab;
+    int tb = (ntab_use + threads - 1) / threads;
+    // Warp/SM insert was parent-identical and 1.31× slower (n8_hash).
+    // Full-dirty RBK was 4.2× slower. Large dirty sets stay on G15 CAS.
+    {
+        NvRange nv("hash_insert");
+        k_hash_insert<<<be, threads>>>(
+            du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf);
+    }
+    static int insert_only = -1;
+    if (insert_only < 0) {
+        const char* s = std::getenv("WATERZ_HASH_INSERT_ONLY");
+        insert_only = (s && std::atoi(s)) ? 1 : 0;
+    }
+    if (!insert_only) {
+    int m = 0;
+    const bool eh = emit_holes() && fuse && ndirty_e > 0;
+    if (eh) {
+        cudaMemset(dnout, 0, 4);
+        cudaMemset(dovf, 0, 4);
+        k_hash_emit_holes<<<tb, threads>>>(
+            dtab, ntab_use, dholes, ndirty_e, du, dv, dsm, dct, dnout, dovf);
+        cudaMemcpy(&m, dnout, 4, cudaMemcpyDeviceToHost);
+        int ov = 0;
+        cudaMemcpy(&ov, dovf, 4, cudaMemcpyDeviceToHost);
+        if (ov) {
+            fprintf(stderr, "EMIT_HOLES overflow m=%d nhole=%d\n", m, ndirty_e);
+            if (scan_acc || hash_acc) {
+                cudaEventDestroy(ea);
+                cudaEventDestroy(eb);
+            }
+            return 0;
+        }
+        if (m < ndirty_e) {
+            int bt = (ndirty_e - m + threads - 1) / threads;
+            if (bt < 1) bt = 1;
+            k_zero_hole_tail<<<bt, threads>>>(dholes, m, ndirty_e, dct);
+        }
+        n9_dirty_hit(ndirty_e, m);
+    } else {
+        k_vacate_kept<<<be, threads>>>(dct, dkeep, n);
+        cudaMemset(dnout, 0, 4);
+        k_hash_emit<<<tb, threads>>>(dtab, ntab_use, tu, tv, tsm, tct, dnout);
+        cudaMemcpy(&m, dnout, 4, cudaMemcpyDeviceToHost);
+        n9_dirty_hit(ndirty_e, m);
+        if (m > 0) {
+            if (!fuse) {
+                cudaMemset(dnhole, 0, 4);
+                k_list_holes<<<be, threads>>>(dct, n, dholes, dnhole);
+                int nh = 0;
+                cudaMemcpy(&nh, dnhole, 4, cudaMemcpyDeviceToHost);
+                (void)nh;
+            }
+            int bm = (m + threads - 1) / threads;
+            if (bm < 1) bm = 1;
+            k_fill_holes<<<bm, threads>>>(tu, tv, tsm, tct, dholes, m,
+                                          du, dv, dsm, dct);
+        }
+    }
+    if (arith) {
+        *n_live = nlive_in - nself - ndirty_e + m;
+        if (*n_live < 0) *n_live = 0;
+    } else {
+        cudaMemset(dnout, 0, 4);
+        k_count_live<<<be, threads>>>(dct, n, dnout);
+        cudaMemcpy(n_live, dnout, 4, cudaMemcpyDeviceToHost);
+    }
+    } else {
+        n9_dirty_hit(ndirty_e, 0);
+        if (arith) {
+            *n_live = nlive_in - nself - ndirty_e;
+            if (*n_live < 0) *n_live = 0;
+        } else {
+            cudaMemset(dnout, 0, 4);
+            k_count_live<<<be, threads>>>(dct, n, dnout);
+            cudaMemcpy(n_live, dnout, 4, cudaMemcpyDeviceToHost);
+        }
+    }
+    }
+    if (hash_acc) {
+        cudaEventRecord(eb);
+        cudaEventSynchronize(eb);
+        float ms = 0;
+        cudaEventElapsedTime(&ms, ea, eb);
+        *hash_acc += (double)ms;
+    }
+    if (scan_acc || hash_acc) {
+        cudaEventDestroy(ea);
+        cudaEventDestroy(eb);
+    }
+    return 1;
+}
+
 static int next_pow2(int x)
 {
     int p = 1;
@@ -1446,6 +2385,90 @@ __global__ void k_gather_smct(
     uint32_t e = sel[j];
     smo[j] = sm[e];
     cto[j] = ct[e];
+}
+
+static int dirty_rbk(
+    uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, uint8_t* dkeep,
+    int64_t n, int ndirty_e, int* n_live, int be, int threads,
+    uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
+    uint32_t* dholes, int* dnhole, int* dnout)
+{
+    (void)ndirty_e;
+    uint32_t* sel = tu;
+    uint32_t* sel2 = tv;
+    void* tmp = nullptr;
+    size_t tmp_bytes = 0;
+    cub::DeviceSelect::Flagged(
+        nullptr, tmp_bytes, thrust::make_counting_iterator<uint32_t>(0),
+        dkeep, sel, dnout, (int)n);
+    cudaMalloc(&tmp, tmp_bytes ? tmp_bytes : 4);
+    cub::DeviceSelect::Flagged(
+        tmp, tmp_bytes, thrust::make_counting_iterator<uint32_t>(0),
+        dkeep, sel, dnout, (int)n);
+    int hm = 0;
+    cudaMemcpy(&hm, dnout, 4, cudaMemcpyDeviceToHost);
+    if (hm <= 0) {
+        cudaFree(tmp);
+        cudaMemset(dnout, 0, 4);
+        k_count_live<<<be, threads>>>(dct, n, dnout);
+        cudaMemcpy(n_live, dnout, 4, cudaMemcpyDeviceToHost);
+        return 1;
+    }
+    unsigned long long* dkey = nullptr;
+    unsigned long long* dkeyo = nullptr;
+    double* smo = nullptr;
+    int64_t* cto = nullptr;
+    cudaMalloc(&dkey, (size_t)hm * 8);
+    cudaMalloc(&dkeyo, (size_t)hm * 8);
+    cudaMalloc(&smo, (size_t)hm * 8);
+    cudaMalloc(&cto, (size_t)hm * 8);
+    int bm = (hm + threads - 1) / threads;
+    if (bm < 1) bm = 1;
+    k_key_from_sel<<<bm, threads>>>(du, dv, sel, dkey, hm);
+    size_t sb = 0;
+    cub::DeviceRadixSort::SortPairs(nullptr, sb, dkey, dkeyo, sel, sel2, hm);
+    if (sb > tmp_bytes) {
+        cudaFree(tmp);
+        cudaMalloc(&tmp, sb);
+        tmp_bytes = sb;
+    }
+    cub::DeviceRadixSort::SortPairs(tmp, tmp_bytes, dkey, dkeyo, sel, sel2, hm);
+    k_gather_smct<<<bm, threads>>>(dsm, dct, sel2, tsm, tct, hm);
+    cub::DeviceReduce::ReduceByKey(
+        tmp, tmp_bytes, dkeyo, dkey, tsm, smo, dnout, cub::Sum(), hm);
+    int m = 0;
+    cudaMemcpy(&m, dnout, 4, cudaMemcpyDeviceToHost);
+    cub::DeviceReduce::ReduceByKey(
+        tmp, tmp_bytes, dkeyo, dkey, tct, cto, dnout, cub::Sum(), hm);
+    n9_dirty_hit(hm, m);
+    if (m > 0) {
+        int bu = (m + threads - 1) / threads;
+        if (bu < 1) bu = 1;
+        k_unpack_uvkey<<<bu, threads>>>(dkey, tu, tv, m);
+        cudaMemcpy(tsm, smo, (size_t)m * 8, cudaMemcpyDeviceToDevice);
+        cudaMemcpy(tct, cto, (size_t)m * 8, cudaMemcpyDeviceToDevice);
+    }
+    cudaFree(dkey);
+    cudaFree(dkeyo);
+    cudaFree(smo);
+    cudaFree(cto);
+    cudaFree(tmp);
+    k_vacate_kept<<<be, threads>>>(dct, dkeep, n);
+    if (m > 0) {
+        cudaMemset(dnhole, 0, 4);
+        k_list_holes<<<be, threads>>>(dct, n, dholes, dnhole);
+        int nh = 0;
+        cudaMemcpy(&nh, dnhole, 4, cudaMemcpyDeviceToHost);
+        int bm2 = (m + threads - 1) / threads;
+        if (bm2 < 1) bm2 = 1;
+        k_fill_holes<<<bm2, threads>>>(tu, tv, tsm, tct, dholes, m,
+                                       du, dv, dsm, dct);
+        (void)nh;
+    }
+    cudaMemset(dnout, 0, 4);
+    k_count_live<<<be, threads>>>(dct, n, dnout);
+    cudaMemcpy(n_live, dnout, 4, cudaMemcpyDeviceToHost);
+    return 1;
 }
 
 // Measurement hook, not part of the algorithm. The inner loop makes four
@@ -1519,6 +2542,7 @@ static int compact_radix(
     unsigned long long* dkey, unsigned long long* dkeyo, CompactScratch& csr,
     double TL = 0.0, bool recompress = true)
 {
+    NvRange nv("compact_radix");
     int bn = (nnode + threads - 1) / threads;
     // k_compress walks each node to its root, so after one pass every entry
     // already points at a root and a second pass cannot change anything. The
@@ -1917,6 +2941,9 @@ struct P0aaProf {
     double d2h_ms;
     double host_ms;
     int n_layer;
+    double rewrite_scan_ms;
+    double hash_ms;
+    double compact_radix_ms;
     int layer_outers[64];
     int layer_merges[64];
     // A2 work accounting. These are counts, not times, so they are unaffected
@@ -1932,18 +2959,30 @@ struct P0aaProf {
     int64_t sum_above;
 };
 
+static double g_iou_scan = 0;
+static double g_iou_hash = 0;
+static double g_iou_radix = 0;
+
+extern "C" void parhac_compact_iou(double* scan, double* hash, double* radix)
+{
+    if (scan) *scan = g_iou_scan;
+    if (hash) *hash = g_iou_hash;
+    if (radix) *radix = g_iou_radix;
+}
+
 static int parhac_e6s_dev(
     uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct, int64_t n_edges,
     const double* aff_thr, int n_thr, double eps,
     uint32_t* parent_out, uint32_t max_id, int64_t* stats_out,
     P0zProf* zprof = nullptr, P0aaProf* aa = nullptr, int max_outer = 64)
 {
+    set_size_asym_from_env();
     const int nnode = (int)max_id + 1;
     uint32_t *dparent, *dsz, *dsz0, *dreds, *dblues, *dadd;
     unsigned long long *dprop;
-    uint32_t *tu, *tv, *cu, *cv;
-    double *dblk, *tsm, *csm;
-    int64_t *tct, *cct;
+    uint32_t *tu, *tv;
+    double *dblk, *tsm;
+    int64_t *tct;
     uint8_t *dkeep, *dcolor, *dfrozen;
     int *dnmerge, *dnprop, *ddbg, *dnact, *dndirty, *dnstar;
     uint8_t *ddirty_blue, *ddirty_star;
@@ -2002,10 +3041,6 @@ static int parhac_e6s_dev(
     cudaMalloc(&tv, (size_t)n_edges * 4);
     cudaMalloc(&tsm, (size_t)n_edges * 8);
     cudaMalloc(&tct, (size_t)n_edges * 8);
-    cudaMalloc(&cu, (size_t)n_edges * 4);
-    cudaMalloc(&cv, (size_t)n_edges * 4);
-    cudaMalloc(&csm, (size_t)n_edges * 8);
-    cudaMalloc(&cct, (size_t)n_edges * 8);
     cudaMalloc(&dtab, (size_t)ntab * sizeof(HSlot));
     cudaMalloc(&dnout, 4);
     // Both of these are cleared once here rather than once per inner
@@ -2051,16 +3086,88 @@ static int parhac_e6s_dev(
     // the reference that established the fingerprint.
     const char* hs = std::getenv("WATERZ_E6S_HASH");
     const bool use_hash = !(hs && std::atoi(hs) == 0);
+    const char* ce = std::getenv("WATERZ_COMPACT_EVERY");
+    const int compact_k = ce ? std::atoi(ce) : 0;
+    // G-series work-efficiency levers, as a bitmask so each can be A/B'd on
+    // its own against this build. Every one of them is bit-identical by
+    // construction rather than by tuning -- see the equivalence argument next
+    // to each -- and scripts/g0_agg_ref.py checks that claim on the real val
+    // RAG with a CPU replica of this loop. None has been run on a device yet,
+    // so they default off: the locked fingerprint in a1_e6s_voi.json is what
+    // this file is for, and a lever that cannot be measured must not be able
+    // to change it. scripts/g_levers.py turns them on one at a time.
+    //
+    //   1  k_freeze_reds for k_freeze, which also retires dcolor and k_color
+    //   2  dirty-set hash combine (G2); physical compact stays at layer entry
+    //   4  candidate-blue list AND the active-edge list (G3). The edge list
+    //      is rebuilt from the dirty set after each G2 compact; without G2
+    //      it is rebuilt from scratch after the full combine, which is
+    //      still cheaper than proposing over every live edge.
+    //   8  incremental root list (G4): skip the per-outer full-nnode
+    //      compress/zero/rebuild, copy sz and clear frozen over live
+    //      roots only, compact the list after each accept, compress
+    //      accepted blues only. sz is the incremental value k_accept_reds
+    //      already maintains.
+    const char* lvs = std::getenv("WATERZ_AGG_LEVERS");
+    const int levers = lvs ? std::atoi(lvs) : 0;
+    const bool lv_freeze_reds = (levers & 1) != 0;
+    const bool lv_dirty = (levers & 2) != 0;
+    const bool lv_bluelist = (levers & 4) != 0;
+    const bool lv_rootlist = (levers & 8) != 0;
+    uint32_t* dblist = nullptr;
+    int* dnlist = nullptr;
+    if (lv_bluelist) {
+        // At most one entry per blue, and a blue is a distinct root, so nnode
+        // bounds the list for any inner iteration.
+        cudaMalloc(&dblist, (size_t)nnode * 4);
+        cudaMalloc(&dnlist, 4);
+    }
+    uint8_t* ddirty = nullptr;
+    uint32_t* dholes = nullptr;
+    int* dnhole = nullptr;
+    uint8_t* damask = nullptr;
+    uint32_t* dalist = nullptr;
+    int* dnact_l = nullptr;
+    uint32_t* droots = nullptr;
+    uint32_t* drootflag = nullptr;
+    int* dnroot = nullptr;
+    int nroot = nnode > 0 ? nnode - 1 : 0;
+    int nact_l = 0;
+    int64_t nscan = nlive;
+    if (lv_dirty) {
+        cudaMalloc(&ddirty, (size_t)nnode);
+        cudaMalloc(&dholes, (size_t)n_edges * 4);
+        cudaMalloc(&dnhole, 4);
+    }
+    if (lv_bluelist) {
+        cudaMalloc(&damask, (size_t)n_edges);
+        cudaMalloc(&dalist, (size_t)n_edges * 4);
+        cudaMalloc(&dnact_l, 4);
+    }
+    if (lv_rootlist) {
+        cudaMalloc(&droots, (size_t)nnode * 4);
+        cudaMalloc(&drootflag, (size_t)nnode * 4);
+        cudaMalloc(&dnroot, 4);
+        k_init_root_list<<<bn, threads>>>(droots, nnode);
+    }
     int* dovf = nullptr;
     cudaMalloc(&dovf, 4);
     cudaMemset(dovf, 0, 4);
     if (max_outer < 1) max_outer = 64;
+    {
+        const char* s = std::getenv("WATERZ_MAX_OUTER");
+        if (s && *s) {
+            int v = std::atoi(s);
+            if (v > 0) max_outer = v;
+        }
+    }
     {
         int be0 = (int)((n_edges + threads - 1) / threads);
         if (be0 < 1) be0 = 1;
         k_scale_sm_bytes<<<be0, threads>>>(dsm, n_edges);
     }
     EvAccum ev_compact(aa ? &aa->compact_ms : nullptr);
+    EvAccum ev_radix(aa ? &aa->compact_radix_ms : nullptr);
     EvAccum ev_propose(aa ? &aa->propose_ms : nullptr);
     EvAccum ev_pack(aa ? &aa->pack_ms : nullptr);
     EvAccum ev_sort(aa ? &aa->sort_ms : nullptr);
@@ -2077,10 +3184,10 @@ static int parhac_e6s_dev(
         const double T = aff_thr[ti] * SM_BYTE_SCALE;
         int64_t nmerge = 0, ninner = 0, nouter = 0;
         for (int layer = 0; layer < 10000; ++layer) {
-            int be = (int)((nlive + threads - 1) / threads);
+            int be = (int)((nscan + threads - 1) / threads);
             if (be < 1) be = 1;
             k_compress<<<bn, threads>>>(dparent, nnode);
-            k_wmax_live<<<nblk, 256>>>(du, dv, dsm, dct, dparent, nlive, dblk);
+            k_wmax_live<<<nblk, 256>>>(du, dv, dsm, dct, dparent, nscan, dblk);
             ev_d2h.start();
             cudaMemcpy(hblk.data(), dblk, (size_t)nblk * 8, cudaMemcpyDeviceToHost);
             ev_d2h.stop();
@@ -2092,30 +3199,71 @@ static int parhac_e6s_dev(
             double TL = wmax / (1.0 + eps);
             if (TL < T) TL = T;
             ev_compact.start();
-            compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
+            ev_radix.start();
+            compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nscan, &nlive,
                 be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr);
+            ev_radix.stop();
             ev_compact.stop();
             if (nlive <= 0) break;
-            be = (int)((nlive + threads - 1) / threads);
+            nscan = nlive;
+            be = (int)((nscan + threads - 1) / threads);
             if (be < 1) be = 1;
+            if (lv_bluelist) {
+                k_init_amask<<<be, threads>>>(dsm, dct, nscan, TL, damask);
+                cudaMemset(dnact_l, 0, 4);
+                k_pack_amask<<<be, threads>>>(damask, dct, nscan, dalist, dnact_l);
+                cudaMemcpy(&nact_l, dnact_l, 4, cudaMemcpyDeviceToHost);
+            }
             int layer_merges = 0;
             int layer_outers = 0;
             int layer_first_zero = -1;
             bool layer_done = false;
             for (int outer = 0; outer < max_outer; ++outer) {
                 ev_compress.start();
-                k_compress<<<bn, threads>>>(dparent, nnode);
-                k_zero_sz<<<bn, threads>>>(dsz, nnode);
-                k_rebuild_sz<<<bn, threads>>>(dparent, dsz, nnode);
+                // G4: k_accept_reds already keeps sz[root] equal to the
+                // member count. Rebuilding it from all nnode is the same
+                // numbers written back onto the same roots. Frozen and
+                // sz0 are only read at current roots. parent[i] for a
+                // never-merged fragment is still i, and after a merge the
+                // only stale parent slots are on absorbed blues, which
+                // propose finds through. Skipping the three full-nnode
+                // passes is therefore a no-op for every decision.
+                if (!lv_rootlist) {
+                    k_compress<<<bn, threads>>>(dparent, nnode);
+                    k_zero_sz<<<bn, threads>>>(dsz, nnode);
+                    k_rebuild_sz<<<bn, threads>>>(dparent, dsz, nnode);
+                }
                 ev_compress.stop();
                 ev_memset.start();
-                cudaMemset(dcolor, 0, (size_t)nnode);
-                cudaMemset(dfrozen, 0, (size_t)nnode);
+                // dcolor exists only for k_freeze. k_propose derives a node's
+                // colour inline from color_of() and marks the array (void), so
+                // once k_freeze_reds is in play nothing reads dcolor at all and
+                // both the clear and k_color are dead. nullptr is passed to
+                // k_propose in that case so a future reader faults loudly
+                // instead of reading a stale buffer.
+                if (!lv_freeze_reds) cudaMemset(dcolor, 0, (size_t)nnode);
+                if (lv_rootlist) {
+                    int br = (nroot + threads - 1) / threads;
+                    if (br < 1) br = 1;
+                    k_clear_frozen_list<<<br, threads>>>(
+                        dfrozen, droots, nroot);
+                } else {
+                    cudaMemset(dfrozen, 0, (size_t)nnode);
+                }
                 ev_memset.stop();
                 ev_color.start();
-                k_color<<<bn, threads>>>(dcolor, dparent, nnode,
-                    0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer);
-                k_copy_sz<<<bn, threads>>>(dsz, dsz0, nnode);
+                if (!lv_freeze_reds)
+                    k_color<<<bn, threads>>>(dcolor, dparent, nnode,
+                        0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer);
+                if (lv_rootlist) {
+                    int br = (nroot + threads - 1) / threads;
+                    if (br < 1) br = 1;
+                    if (outer == 0 || !sticky_sz0())
+                        k_copy_sz_list<<<br, threads>>>(dsz, dsz0, droots, nroot);
+                } else {
+                    if (outer == 0 || !sticky_sz0())
+                        k_copy_sz<<<bn, threads>>>(dsz, dsz0, nnode);
+                }
                 ev_color.stop();
                 for (int inner = 0; inner < 64; ++inner) {
                     ev_memset.start();
@@ -2126,16 +3274,49 @@ static int parhac_e6s_dev(
                     if (zprof) cudaMemset(ddbg, 0, 20);
                     ev_memset.stop();
                     ev_propose.start();
-                    k_propose<<<be, threads>>>(
-                        du, dv, dsm, dct, dparent, dsz, dcolor, dfrozen,
-                        nlive, TL, dprop,
-                        0xA5A5ULL + (uint64_t)inner * 17 + (uint64_t)outer,
-                        0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer,
-                        zprof ? ddbg : nullptr, dnabove);
+                    {
+                    NvRange nv("propose");
+                    if (lv_bluelist && nact_l > 0) {
+                        cudaMemset(dnlist, 0, 4);
+                        int ba = (nact_l + threads - 1) / threads;
+                        if (ba < 1) ba = 1;
+                        k_propose_listed<<<ba, threads>>>(
+                            dalist, nact_l, du, dv, dsm, dct, dparent, dsz,
+                            dfrozen, TL, dprop, dblist, dnlist,
+                            0xA5A5ULL + (uint64_t)inner * 17 + (uint64_t)outer,
+                            0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer,
+                            dnabove);
+                    } else if (lv_bluelist) {
+                        cudaMemset(dnlist, 0, 4);
+                        k_propose_bluelist<<<be, threads>>>(
+                            du, dv, dsm, dct, dparent, dsz, dfrozen,
+                            nscan, TL, dprop, dblist, dnlist,
+                            0xA5A5ULL + (uint64_t)inner * 17 + (uint64_t)outer,
+                            0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer,
+                            dnabove);
+                    } else {
+                        k_propose<<<be, threads>>>(
+                            du, dv, dsm, dct, dparent, dsz,
+                            lv_freeze_reds ? nullptr : dcolor, dfrozen,
+                            nscan, TL, dprop,
+                            0xA5A5ULL + (uint64_t)inner * 17 + (uint64_t)outer,
+                            0xC0FFEEULL + (uint64_t)layer * 10007 + (uint64_t)outer,
+                            zprof ? ddbg : nullptr, dnabove);
+                    }
+                    }
                     ev_propose.stop();
                     ev_pack.start();
-                    k_pack_prop_fused<<<bn, threads>>>(
-                        dprop, dsz, nnode, pkey_in, ppay_in, dnprop);
+                    {
+                    NvRange nv("pack");
+                    if (lv_bluelist) {
+                        k_pack_listed_fused<<<bn < 256 ? bn : 256, threads>>>(
+                            dblist, dnlist, dprop, dsz, pkey_in, ppay_in,
+                            dnprop);
+                    } else {
+                        k_pack_prop_fused<<<bn, threads>>>(
+                            dprop, dsz, nnode, pkey_in, ppay_in, dnprop);
+                    }
+                    }
                     ev_pack.stop();
                     int hnp[2] = {0, 0};
                     ev_d2h.start();
@@ -2186,6 +3367,8 @@ static int parhac_e6s_dev(
                     int bp = (nprop + threads - 1) / threads;
                     if (bp < 1) bp = 1;
                     ev_sort.start();
+                    {
+                    NvRange nv("sort_prop");
                     if (nprop <= PSORT_BLOCK_CAP) {
                         k_sort_prop_block<PSORT_BLOCK_T, PSORT_ITEMS>
                             <<<1, PSORT_BLOCK_T>>>(
@@ -2197,16 +3380,46 @@ static int parhac_e6s_dev(
                     }
                     k_unpack_prop<<<bp, threads>>>(
                         pkey_out, ppay_out, dreds, dblues, dadd, nprop);
+                    }
                     ev_sort.stop();
                     ev_accept.start();
+                    {
+                    NvRange nv("accept");
                     k_accept_reds<<<bp, threads>>>(
                         dreds, dblues, dadd, nprop, dparent, dsz, dfrozen, eps, dnmerge);
+                    }
                     ev_accept.stop();
                     ev_compress.start();
-                    k_compress<<<bn, threads>>>(dparent, nnode);
+                    if (lv_rootlist)
+                        k_compress_list<<<bp, threads>>>(dparent, dblues, nprop);
+                    else
+                        k_compress<<<bn, threads>>>(dparent, nnode);
                     ev_compress.stop();
                     ev_freeze.start();
-                    k_freeze<<<bn, threads>>>(dparent, dsz, dsz0, dcolor, dfrozen, nnode, eps);
+                    if (lv_freeze_reds) {
+                        // G1. k_freeze sweeps all nnode nodes to find the reds;
+                        // the reds are already listed, sorted, in dreds.
+                        //
+                        // Equivalent, not approximately so:
+                        //  - k_freeze acts only on color[i]==1, and k_color
+                        //    colours only roots, so its domain is the red roots.
+                        //  - reds and blues are disjoint by colour and only
+                        //    blues are reparented, so a red stays a root for the
+                        //    whole outer and find(i)==i. That makes k_freeze's
+                        //    dfind_nocomp and its sz[r]/frozen[i] indexing agree
+                        //    with k_freeze_reds' direct use of reds[i].
+                        //  - a red absent from dreds received no proposal, so
+                        //    sz[r] still equals sz0[r] and the strict > test
+                        //    cannot fire. Skipping it changes nothing.
+                        //  - k_freeze's `sz0[i] ? sz0[i] : 1.0` guard, which
+                        //    k_freeze_reds lacks, is unreachable here: every
+                        //    root is its own member so k_rebuild_sz leaves
+                        //    sz0[root] >= 1.
+                        k_freeze_reds<<<bp, threads>>>(
+                            dreds, dnprop, dsz, dsz0, dfrozen, eps);
+                    } else {
+                        k_freeze<<<bn, threads>>>(dparent, dsz, dsz0, dcolor, dfrozen, nnode, eps);
+                    }
                     ev_freeze.stop();
                     int hm = 0;
                     ev_d2h.start();
@@ -2241,18 +3454,81 @@ static int parhac_e6s_dev(
                     }
                     nmerge += hm;
                     layer_merges += hm;
+                    if (lv_rootlist && hm > 0) {
+                        cudaMemset(dnroot, 0, 4);
+                        int brc = (nroot + threads - 1) / threads;
+                        if (brc < 1) brc = 1;
+                        k_compact_roots<<<brc, threads>>>(
+                            droots, drootflag, dparent, nroot, dnroot);
+                        std::swap(droots, drootflag);
+                        cudaMemcpy(&nroot, dnroot, 4,
+                                   cudaMemcpyDeviceToHost);
+                    }
                     if (hm == 0) break;
                     ev_compact.start();
-                    if (use_hash) {
+                    if (lv_dirty) {
+                        if (!dirty_unmark() || inner == 0)
+                            cudaMemset(ddirty, 0, (size_t)nnode);
+                        k_mark_acc_blue<<<bp, threads>>>(
+                            dblues, dreds, nprop, dparent, ddirty, ddirty);
+                        int n_kept = 0;
+                        hash_combine_dirty(
+                            du, dv, dsm, dct, dkeep, dparent, ddirty, nscan,
+                            nlive, &n_kept, be, threads, tu, tv, tsm, tct,
+                            dholes, dnhole, dtab, ntab, dnout, dovf,
+                            aa ? &aa->rewrite_scan_ms : nullptr,
+                            aa ? &aa->hash_ms : nullptr);
+                        nlive = n_kept;
+                        if (compact_k > 0 && ((inner + 1) % compact_k) == 0) {
+                            compact_radix(
+                                du, dv, dsm, dct, dkeep, dparent, nnode, nscan,
+                                &nlive, be, threads, tu, tv, tsm, tct,
+                                dkey, dkeyo, csr, 0.0, false);
+                            nscan = nlive;
+                        }
+                        if (lv_bluelist) {
+                            cudaMemset(dnact_l, 0, 4);
+                            if (fuse_pack()) {
+                                k_rebuild_pack<<<be, threads>>>(
+                                    du, dv, dsm, dct, dkeep, ddirty, nscan, TL,
+                                    dalist, dnact_l, damask);
+                            } else {
+                                k_rebuild_active<<<be, threads>>>(
+                                    du, dv, dsm, dct, dkeep, ddirty, nscan, TL,
+                                    dalist, dnact_l, damask);
+                                k_pack_amask<<<be, threads>>>(
+                                    damask, dct, nscan, dalist, dnact_l);
+                            }
+                            cudaMemcpy(&nact_l, dnact_l, 4,
+                                       cudaMemcpyDeviceToHost);
+                        }
+                        if (dirty_unmark()) {
+                            k_unmark_acc_blue<<<bp, threads>>>(
+                                dblues, dreds, nprop, dparent, ddirty, ddirty);
+                        }
+                    } else if (use_hash) {
                         hash_combine_live(du, dv, dsm, dct, dkeep, dparent, nnode,
                             nlive, &nlive, be, threads, tu, tv, tsm, tct,
                             dtab, ntab, dnout, dovf, false);
+                        nscan = nlive;
+                        if (lv_bluelist) {
+                            be = (int)((nscan + threads - 1) / threads);
+                            if (be < 1) be = 1;
+                            k_init_amask<<<be, threads>>>(
+                                dsm, dct, nscan, TL, damask);
+                            cudaMemset(dnact_l, 0, 4);
+                            k_pack_amask<<<be, threads>>>(
+                                damask, dct, nscan, dalist, dnact_l);
+                            cudaMemcpy(&nact_l, dnact_l, 4,
+                                       cudaMemcpyDeviceToHost);
+                        }
                     } else {
                         compact_radix(du, dv, dsm, dct, dkeep, dparent, nnode, nlive, &nlive,
                             be, threads, tu, tv, tsm, tct, dkey, dkeyo, csr, 0.0, false);
+                        nscan = nlive;
                     }
                     ev_compact.stop();
-                    be = (int)((nlive + threads - 1) / threads);
+                    be = (int)((nscan + threads - 1) / threads);
                     if (be < 1) be = 1;
                     if (nlive <= 0) break;
                 }
@@ -2291,9 +3567,17 @@ static int parhac_e6s_dev(
     {
         int hovf = 0;
         cudaMemcpy(&hovf, dovf, 4, cudaMemcpyDeviceToHost);
-        if (hovf) std::fprintf(stderr, "E6s_HASH_OVERFLOW probe limit hit\n");
+        if (hovf & HOVF_PROBE)
+            std::fprintf(stderr, "E6s_HASH_OVERFLOW probe limit hit\n");
+        if (hovf & HOVF_WIDTH)
+            std::fprintf(stderr, "E6s_HASH_OVERFLOW uint32 sm/ct exceeded; "
+                                 "weights are wrong, widen HSlot\n");
     }
     cudaFree(dovf);
+    cudaFree(dblist); cudaFree(dnlist);
+    cudaFree(ddirty); cudaFree(dholes); cudaFree(dnhole);
+    cudaFree(damask); cudaFree(dalist); cudaFree(dnact_l);
+    cudaFree(droots); cudaFree(drootflag); cudaFree(dnroot);
     cudaFree(dfrozen); cudaFree(dprop);
     cudaFree(pkey_in); cudaFree(pkey_out);
     cudaFree(ppay_in); cudaFree(ppay_out); cudaFree(psort_tmp);
@@ -2304,7 +3588,6 @@ static int parhac_e6s_dev(
     cudaFree(alloc_tu); cudaFree(alloc_tv);
     cudaFree(alloc_tsm); cudaFree(alloc_tct); cudaFree(dblk);
     cudaFree(dtab); cudaFree(dnout); cudaFree(dkey); cudaFree(dkeyo);
-    cudaFree(cu); cudaFree(cv); cudaFree(csm); cudaFree(cct);
     if (zprof) {
         cudaFree(ddbg); cudaFree(dnact); cudaFree(dndirty); cudaFree(dnstar);
         cudaFree(ddirty_blue); cudaFree(ddirty_star);
@@ -2494,6 +3777,7 @@ static int parhac_e6t_dev(
     const double* aff_thr, int n_thr, double eps,
     uint32_t* parent_out, uint32_t max_id, int64_t* stats_out)
 {
+    set_size_asym_from_env();
     const int nnode = (int)max_id + 1;
     uint32_t *dparent, *dsz, *dsz0, *dreds, *dblues, *dadd;
     unsigned long long *dprop;
@@ -2877,31 +4161,26 @@ extern "C" int parhac_paper_d(
     return rc;
 }
 
+// Consumes its input: the edge arrays are the working arrays, rewritten in
+// place, and hold garbage on return.
+//
+// The previous version allocated a second full set and copied device-to-device
+// into it, so two complete edge sets were live across the whole run. At
+// 2.16 Gvox that is 2.06 GiB of duplicate held for the entire agglomeration,
+// which is more than narrowing every payload to uint32 would save, plus 2 GiB
+// of pointless copy. The only caller is segment_d, which frees these arrays as
+// soon as this returns and never reads them again.
 extern "C" int parhac_paper_d_dev(
-    const uint32_t* du_in, const uint32_t* dv_in,
-    const double* dsm_in, const int64_t* dct_in,
+    uint32_t* du, uint32_t* dv, double* dsm, int64_t* dct,
     int64_t n_edges, const double* aff_thr, int n_thr, double eps,
     uint32_t* parent_out, uint32_t max_id, int64_t* stats_out)
 {
     if (n_edges <= 0 || n_thr <= 0) return 0;
-    uint32_t *du, *dv;
-    double *dsm;
-    int64_t *dct;
-    cudaMalloc(&du, (size_t)n_edges * 4);
-    cudaMalloc(&dv, (size_t)n_edges * 4);
-    cudaMalloc(&dsm, (size_t)n_edges * 8);
-    cudaMalloc(&dct, (size_t)n_edges * 8);
-    cudaMemcpy(du, du_in, (size_t)n_edges * 4, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dv, dv_in, (size_t)n_edges * 4, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dsm, dsm_in, (size_t)n_edges * 8, cudaMemcpyDeviceToDevice);
-    cudaMemcpy(dct, dct_in, (size_t)n_edges * 8, cudaMemcpyDeviceToDevice);
-    int rc = std::getenv("WATERZ_PAPER_E6T")
+    return std::getenv("WATERZ_PAPER_E6T")
         ? parhac_e6t_dev(du, dv, dsm, dct, n_edges, aff_thr, n_thr, eps,
             parent_out, max_id, stats_out)
         : parhac_e6s_dev(du, dv, dsm, dct, n_edges, aff_thr, n_thr, eps,
             parent_out, max_id, stats_out);
-    cudaFree(du); cudaFree(dv); cudaFree(dsm); cudaFree(dct);
-    return rc;
 }
 
 extern "C" int parhac_e6s_profile(
@@ -2997,6 +4276,9 @@ extern "C" int parhac_e6s_p0aa(
         work_counts[0] = aa.sum_nlive;
         work_counts[1] = aa.sum_above;
     }
+    g_iou_scan = aa.rewrite_scan_ms;
+    g_iou_hash = aa.hash_ms;
+    g_iou_radix = aa.compact_radix_ms;
     cudaFree(du); cudaFree(dv); cudaFree(dsm); cudaFree(dct);
     return rc;
 }

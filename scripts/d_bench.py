@@ -7,11 +7,15 @@ before this script lived one layer down, on the agglomeration alone or on the
 watershed alone, which is useful for deciding what to work on but is not the
 number the task is graded on. This produces that number.
 
-Times segment(), the entry point TASK names, which takes a host array and
-returns host labels. That includes the host-to-device copy of the affinities
-and the device-to-host copy of the labels, so it is the honest end-to-end cost
-of asking for a segmentation. segment_d, the device-resident variant that
-skips both copies, needs torch, which is not installed on this machine.
+By default it times segment(), the entry point TASK names, which takes a host
+array and returns host labels. That includes the host-to-device copy of the
+affinities and the device-to-host copy of the labels, so it is the honest
+end-to-end cost of asking for a segmentation.
+
+--device times segment_d instead: affinity already in VRAM, labels left in
+VRAM, bracketed by CUDA events. That is the shape TASK grades. Its labels are
+also compared against the host path, so a faster number cannot come from a
+different answer.
 
 The stage split comes from segment.STAGE_MS. It is free to collect here: every
 stage helper is a blocking ctypes call that ends on a device-to-host copy, so
@@ -70,17 +74,57 @@ def other_procs():
     return [ln for ln in out.splitlines() if ln.split(",")[0].strip() != me]
 
 
+def bench_device(S, aff_u8, thr, runs, nvox):
+    """The graded shape: affinity already in VRAM, labels left in VRAM, timed
+    with CUDA events. Both copies are outside the measurement, so this is the
+    kernel cost alone rather than the cost of asking a host caller for labels."""
+    aff_d = S.DevBuf.from_host(aff_u8)
+    warm = S.segment_d(aff_d, [thr], return_device=True)
+    print(f"D-dev agglomeration backend: {S.AGG_BACKEND}", flush=True)
+    if S.AGG_BACKEND != "gpu_dev":
+        print("D-dev WARNING the RAG went through the host, so this is not "
+              "the device-resident path", flush=True)
+    ref = warm[0].to_host()
+    for b in warm:
+        b.free()
+
+    times, splits, last = [], [], None
+    for i in range(runs):
+        out, ms = S.cuda_event_time(
+            lambda: S.segment_d(aff_d, [thr], return_device=True))
+        times.append(ms / 1000.0)
+        splits.append(dict(S.STAGE_MS))
+        last = out[0].to_host()
+        for b in out:
+            b.free()
+        print(f"D-dev run{i} {ms:.1f} ms  {nvox / (ms / 1e3) / 1e9:.3f} Gvox/s",
+              flush=True)
+    aff_d.free()
+    det = bool(np.array_equal(ref, last))
+    return times, splits, det, last
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--aff", default=str(AFF))
     ap.add_argument("--runs", type=int, default=RUNS)
     ap.add_argument("--threshold", type=float, default=THR)
+    ap.add_argument("--device", action="store_true",
+                    help="time the device-resident path with CUDA events")
+    ap.add_argument("--crop", nargs=3, type=int, default=None,
+                    metavar=("Z", "Y", "X"),
+                    help="run a corner crop, for when the card lacks the "
+                         "headroom for the whole volume; never gradeable")
     args = ap.parse_args()
 
     import segment as S
 
     with h5py.File(args.aff, "r") as f:
-        aff = f["affinity"][:]
+        if args.crop:
+            cz, cy, cx = args.crop
+            aff = f["affinity"][:, :cz, :cy, :cx]
+        else:
+            aff = f["affinity"][:]
     aff_u8 = S._as_u8(aff)
     z, y, x = aff_u8.shape[1:]
     nvox = int(z) * int(y) * int(x)
@@ -95,21 +139,30 @@ def main():
     print("D warmup", flush=True)
     labs0 = S.segment(aff_u8, [args.threshold])
     print(f"D agglomeration backend: {S.AGG_BACKEND}", flush=True)
-    if S.AGG_BACKEND != "gpu":
+    if not S.AGG_BACKEND.startswith("gpu"):
         print("D FAIL ran the host agglomeration fallback; a speed number "
               "from that is meaningless", flush=True)
         return False
 
-    times = []
-    splits = []
-    for i in range(args.runs):
-        t0 = time.perf_counter()
-        labs = S.segment(aff_u8, [args.threshold])
-        dt = time.perf_counter() - t0
-        times.append(dt)
-        splits.append(dict(S.STAGE_MS))
-        print(f"D run{i} {dt * 1000:.1f} ms  {nvox / dt / 1e9:.3f} Gvox/s",
-              flush=True)
+    if args.device:
+        times, splits, det, lab_last = bench_device(
+            S, aff_u8, args.threshold, args.runs, nvox)
+        if not np.array_equal(labs0[0], lab_last):
+            print("D FAIL device path disagrees with the host path", flush=True)
+            return False
+        labs = [lab_last]
+    else:
+        times = []
+        splits = []
+        for i in range(args.runs):
+            t0 = time.perf_counter()
+            labs = S.segment(aff_u8, [args.threshold])
+            dt = time.perf_counter() - t0
+            times.append(dt)
+            splits.append(dict(S.STAGE_MS))
+            print(f"D run{i} {dt * 1000:.1f} ms  {nvox / dt / 1e9:.3f} Gvox/s",
+                  flush=True)
+        det = bool(np.array_equal(labs0[0], labs[0]))
 
     med = float(np.median(times))
     gvox = nvox / med / 1e9
@@ -118,7 +171,6 @@ def main():
     split_med = {k: float(np.median([d.get(k, 0.0) for d in splits]))
                  for k in stages}
 
-    det = bool(np.array_equal(labs0[0], labs[0]))
     nseg = int((np.unique(labs[0]) != 0).sum())
     after = other_procs()
 
@@ -137,6 +189,7 @@ def main():
         "shape": [int(z), int(y), int(x)],
         "nvox": nvox,
         "threshold": args.threshold,
+        "path": "device_resident" if args.device else "host_roundtrip",
         "runs": args.runs,
         "times_ms": [t * 1000 for t in times],
         "median_ms": med * 1000,
@@ -149,10 +202,11 @@ def main():
         "gpu": gpu_state(),
         "other_procs_before": before,
         "other_procs_after": after,
-        "gradeable": not before and not after,
+        "crop": args.crop,
+        "gradeable": not before and not after and not args.crop,
     }
     CACHE.mkdir(parents=True, exist_ok=True)
-    dest = CACHE / "d_bench.json"
+    dest = CACHE / ("d_bench_dev.json" if args.device else "d_bench.json")
     dest.write_text(json.dumps(out, indent=2) + "\n")
     print(f"D wrote {dest.name}", flush=True)
     return det

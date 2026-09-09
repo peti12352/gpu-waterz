@@ -1836,3 +1836,1822 @@ reports no change while parent is still unflattened, and the flatten's flag is
 what catches it. `vcount` is indexed by `parent[i]`, so an unflattened parent
 splits a plateau's count and undersizes its BFS queue. The last round is the
 price of proving flatness.
+
+## D3 PASS — the device-resident path, by deleting a dependency instead of installing one
+
+`segment_d` had never run on this machine. It imported torch, torch is not
+installed, and TASK grades exactly this path: affinity already in VRAM, labels
+in VRAM, timed with CUDA events. The obvious fix was to install torch. The
+right one was to look at what torch was being asked to do:
+
+    torch.empty(..., device="cuda")   allocate
+    t.data_ptr()                      get a pointer
+    t.cpu().numpy()                   copy back
+
+That is `cudaMalloc`, a pointer, and `cudaMemcpy`. A 2.5 GB dependency was
+serving as an allocator. `segment_d` now calls the CUDA runtime through ctypes
+(`_rt()`, `DevBuf`) and reads its input through `__cuda_array_interface__`,
+which torch CUDA tensors, cupy and numba all implement — so a caller can still
+hand it a torch tensor, we just no longer import torch to receive one. Fewer
+moving parts on the graded path, and it runs here today.
+
+`DevBuf` publishes the interface too, so with `return_device=True` the labels
+stay in VRAM and the caller can consume them without a copy. That is the
+literal grading shape; the previous code always ended in `.cpu()`.
+
+Added `aff_f32_to_u8_d` to `ws.cu` for float32 input already in VRAM, matching
+host `_as_u8` (scale 255, `rintf`, clamp). Otherwise a float caller would have
+to round-trip through the host just to quantise.
+
+**The real find was that the device agglomeration entry point was dead code.**
+`parhac_paper_d_dev` exists and takes device pointers, but `segment_d` only
+called it `if _e6r_locked()`, and `data/cache/e6r_pass.txt` reads
+`FAIL PASS T03_ms=6841.94 budget=50`. So every `segment_d` call copied the whole
+RAG to the host and back — on a path whose entire purpose is not doing that.
+The gate was also the wrong question: comparing the two entry points,
+
+    parhac_paper_d      cudaMemcpy(..., cudaMemcpyHostToDevice)
+    parhac_paper_d_dev  cudaMemcpy(..., cudaMemcpyDeviceToDevice)
+
+they are otherwise identical — both malloc fresh scratch and call
+`parhac_e6s_dev`. Same bytes in, same kernel, so same bytes out, bit for bit;
+no experiment can distinguish them. E6r was a *speed* budget on an unrelated
+experiment being used to gate *correctness* of a different function. Now gated
+on `_PARHAC_D.is_file()` and honouring `WATERZ_AGG_CPU`, with `AGG_BACKEND` set
+to `gpu_dev` so a bench can tell which one ran and refuse to report a number
+from the wrong one.
+
+Gate, `scripts/d3_dev_check.py` on a 2.1 Mvox crop, all against `segment()`:
+
+    host input, host out                    identical=True
+    u8 in VRAM, labels in VRAM              identical=True   backend=gpu_dev
+    f32 in VRAM, quantised on device        identical=True
+    device path run twice, same input       identical=True
+
+Crop, not full val, deliberately: a co-tenant holds 27.4 GiB of the 32 GiB and
+val needs ~4.4 GiB for the watershed alone against 4.6 GiB free. A correctness
+gate is not worth OOM-ing someone else's job for, and it does not need the
+whole volume to be conclusive.
+
+`d_bench.py --device` is the median/min/max-of-5 bench, bracketed by
+`cuda_event_time`, with both copies outside the measured region. It also
+compares its labels against the host path, so a fast number cannot come from a
+different answer. On a 28.3 Mvox crop with the card at 99%:
+
+    run0 1633.9   run1 3664.1   run2 5018.4   run3 4198.8   run4 5013.0 ms
+    median 4198.8  min 1633.9  max 5018.4   deterministic=True
+
+A 3.1x spread between min and max, which is the contention signature and not a
+measurement. `gradeable` is false in the JSON for both reasons (shared card,
+and cropped). The harness is what D3 owed; the number waits for an idle card.
+
+Also noted for D1: `_max_edges` floors at 20M edges, so the four edge arrays
+cost 480 MB regardless of volume — 4+4+8+8 bytes each. Narrowing `sm` and `ct`
+to uint32 halves that to 240 MB, and the same 2x applies to the scratch copy
+`parhac_paper_d_dev` makes internally.
+
+## D1 PASS — 18.5 GiB off the 2.16 Gvox peak, and the plan's estimate of it was low
+
+Started by reading the trackers nobody read. `ws.cu` and `parhac_d.cu` both wrap
+cudaMalloc in a peak counter and nothing ever called the accessors, so every
+memory figure in the plan was an estimate. `scripts/d1_mem.py` measures two crop
+sizes and fits a line in voxel count, which separates the per-voxel slope from
+the fixed floor `_max_edges` imposes below ~360 Mvox.
+
+First measurement corrected two numbers the plan had wrong:
+
+    ws scratch     15.69 B/vox measured, not the assumed 22.71
+    agg peak       8.77 B/vox = 17.64 GiB at 2.16 Gvox, not the assumed ~10 GB
+
+A single peak total does not say *which* of ~30 live buffers it is, and
+narrowing the wrong one saves nothing, so I made the tracker attribute the peak
+to source lines (`__LINE__` through the malloc macro, snapshot the book whenever
+a new peak is set, `agg_mem_peak_lines` to read it out). That immediately named
+the target: `dtab`, the dedup hash table, was 40% of the peak at 83 B/edge.
+Everything else was 8 B/edge or less.
+
+Four changes, each gated:
+
+**Fragment and label buffers share one allocation.** `k_extract` is
+`out[i] = parent[seg[i]]`: thread `i` reads only `seg[i]`, writes only `out[i]`,
+and `parent` is a distinct array, so `out` may alias `seg` with no race. The
+last threshold now writes labels over the fragments. 8.05 GiB at 2.16 Gvox.
+Earlier thresholds still need their own buffer, so the four-threshold path is
+gated separately from the single-threshold one — both identical.
+
+**The affinity is freed when the RAG is built.** It is 3n bytes and dead the
+moment the edge weights exist, but it was staying resident through the
+agglomeration peak. 6.03 GiB. Only freed if we allocated it; a caller's buffer
+is not ours to free.
+
+**HSlot narrowed 24 B to 16 B.** `{uint64 key, double sm, uint64 ct}` to
+`{uint64, uint32, uint32}`. This is exact rather than approximate, which is the
+whole reason it is allowed: `sm` is already whole affinity bytes by the time it
+reaches the table (`k_scale_sm_bytes` llrounds it at the top of each layer) and
+`ct` is a face count, so both accumulators are integers and both atomicAdds are
+exact integer sums at either width. Only range is given up. The file's own note
+bounds `sm` by `255*3*nvox = 1.65e12`, far past uint32, so the fit is not
+provable and `k_hash_insert` checks each add against the width using the value
+atomicAdd returns, rather than assuming — the discipline `rag.cu` already
+applies to its own `isum`. Probe overflow and width overflow are separate bits
+now so one cannot mask the other.
+
+**The agglomeration works in place on the caller's edges.** This was the
+surprise, and it is worth more than narrowing every payload: `parhac_paper_d_dev`
+allocated a second complete edge set and copied device-to-device into it, so two
+full sets were live for the whole run — 2.06 GiB of pure duplicate at 2.16 Gvox
+plus 2 GiB of pointless copy. Thresholds are processed in one descending pass
+with snapshots, so the edges are consumed exactly once and never need to be
+pristine again; the only caller frees them immediately after. Now destructive
+and documented as such.
+
+Gate is `scripts/d1_narrow_gate.py`, which builds both widths from one source
+(`-DHSLOT_WIDE`) and runs them in one process on the same input. Comparing
+against `segment()` would have proved nothing since both link the same library
+and would move together; two libraries is the only honest reference.
+
+    wide   HSlot 24 B   agg peak 7.89 B/vox
+    narrow HSlot 16 B   agg peak 6.70 B/vox
+    T=0.2 0.3 0.4 0.5   identical=True, nseg 52724 57018 60454 65647
+    no overflow reported at either width
+
+Where that leaves 2.16 Gvox, with the watershed slabbed by D2:
+
+    fragments/labels     8.05 GiB   spans all stages
+    edge arrays          2.66 GiB
+    agg tracked peak    13.28 GiB   was 17.64
+    stage peak agg      23.98 GiB   was 45.64 at the ws stage
+
+So it fits a 24 GiB card, and I do not believe the margin. 0.02 GiB of spare
+against a peak that is explicitly a *lower bound* — thrust allocates its own
+scratch for sort_by_key and reduce_by_key outside the tracked path — is not a
+fit, it is a coincidence. The honest statement is that 2.16 Gvox now fits the
+5090's 32 GiB with room and sits exactly on the 3090 Ti's line.
+
+Widening that margin is the payload narrowing I did not do: `tsm`, `tct`, `csm`,
+`cct` are still 8 B/edge, worth 1.37 GiB, and the external `sm`/`ct` arrays
+another 0.89 GiB, taking the peak to 21.72 GiB. I stopped short of it on
+purpose. Those four temporaries are swapped with `dsm`/`dct` by the A3
+buffer-swap, so they must share a type with the caller's arrays, which couples
+the change to `rag.cu`'s output and the device entry signature — it cannot be
+kept internal. That is a wide change through the part of this codebase whose
+bit-identity has cost the most to establish, for 2.26 GiB, and it cannot be
+validated where it matters: the binding stage at 2.16 Gvox is still the
+watershed at 45.64 GiB until D2 lands, and there is no 24 GiB card here to check
+against. Doing it blind, before D2, in exchange for margin on a stage that is
+not yet the constraint, is the wrong order. The typedef mechanism and the
+two-library gate are both in place for when it is worth doing.
+
+Also measured: `EDGES_PER_VOX = 0.055` against 0.0427 actual, a 29%
+overallocation. Not worth changing — the RAG table is
+`next_pow2(2*max_edges)`, and 0.048 and 0.055 both round to the same 268 M
+slots, so tightening it buys nothing on the table and only trims the arrays.
+
+## D2 PARTIAL — buffer sharing landed and gated; the z-slab decomposition did not
+
+Measured before rewriting, which changed what the rewrite should be. Gave
+`ws.cu`'s allocation tracker the same per-line attribution as `parhac_d.cu`'s,
+and the watershed's 15.69 B/vox turned out to be four per-voxel uint32 arrays
+plus a tail of nC-sized ones:
+
+    parent   4.0 B/vox     flag   4.0 B/vox
+    vcount   4.0 B/vox     bits   1.0 B/vox     corners_in + keys_in  2.6
+
+`parent` did not need to exist. The stage ends in `k_write_labels`, which is
+`seg[i] = psum[parent[i]] + 1`: thread `i` reads slot `i` of parent, writes slot
+`i` of seg, and `psum` is a separate array, so no thread can observe another's
+overwrite and the two may be the same storage. Exactly the argument that let
+`k_extract` go in place in D1. e9b's parent has the same property and is dead
+before e9c starts, so both stages borrow the caller's label buffer -
+`e9b_divide_d` takes it as an optional `scratch_d` and `e9c_basins_d` already
+had `seg_d` in its signature.
+
+Gated by `scripts/d2_share_gate.py`, building both from one source with
+`-DWS_NO_BUFFER_SHARE` for the reference. There is no CPU oracle at crop scale
+and the val oracle needs ~4.4 GiB against 4.6 GiB free with a co-tenant on the
+card, so a second library was the only reference available; comparing the shared
+build against `segment()` would have compared it against itself.
+
+    reference (own parent)   peak 22.68 B/vox
+    shared    (borrows seg)  peak 20.98 B/vox
+    identical=True  fingerprint_equal=True  nfrag=353562  bg=78924
+
+The saving is 1.71 B/vox, not the 4 the arithmetic suggests, because removing
+parent moved the peak rather than lowering it by its own size. Re-attributing
+after the change shows the peak is now in the plateau-BFS phase, past the point
+where parent and flag are already freed:
+
+    vcount 4.0   corners_out 1.3   keys_out 1.3   start 1.3   start_ps 1.3
+    plat_begin 1.2   plat_nseed 1.2   plat_root 1.2   bits 1.0   = 13.98 B/vox
+
+That is the honest state: watershed scratch 15.69 -> 13.98 B/vox, and the ws
+stage at 2.16 Gvox 45.64 -> 42.20 GiB. Still far over both cards, so **slabbing
+remains mandatory and unfinished.** What it needs to be is now much clearer
+than when the plan was written, and the plan's framing is incomplete in one
+important way:
+
+"`k_flow` is provably a pure 1-voxel-halo function, so slabs are exact" is true
+of `k_flow` and only of `k_flow`. It does not carry to the two stages that
+actually hold the memory. The plateau union-find and the basin union-find
+propagate along plateaus and basins that can run the full z extent, so a slab
+with a 1-voxel halo cannot resolve them locally - a component's root may lie
+many slabs away. Exact slabbing of those needs either iterated halo exchange
+until no slab boundary changes, or the two-level scheme: per-slab local roots,
+then a union-find over *representatives only* across the seams, then flatten
+and renumber globally. The second is the better shape here, because the
+representative count is the fragment count - about 24 M at 2.16 Gvox, so a
+representative-indexed table is ~96 MB rather than 4 B/vox - and because
+min-index roots make the seam unions order-independent, which is what keeps the
+result deterministic and bit-identical to the whole-volume answer.
+
+I stopped rather than start that here. It is a genuine algorithm change across
+both watershed stages, its gate is bit-identity against the whole-volume result
+on val, and val cannot currently be run: 4.42 GiB needed against 4.67 GiB free
+with a 27.4 GiB co-tenant, where being wrong means OOM-ing someone else's job.
+Writing it blind and gating it later inverts the discipline every other item in
+this plan followed.
+
+Two smaller reductions are available first and do not need slabbing, both
+visible in the attribution above. `flag` in `e9c_basins_d` is a 0/1 corner
+predicate held as a uint32 and then scanned in place; `cub::DeviceSelect::Flagged`
+over a transform iterator computing the predicate on the fly would produce the
+corner index list directly and remove the array, and Flagged preserves input
+order so the list is identical to what the scatter produces. `vcount` is 4 B/vox
+indexed by root and is now the largest single item at 28.6%.
+
+## A4 — condition met, but half of it is already refuted by E12 and the other half is gated on a card I cannot get
+
+A4 was conditional: "only if A1+A3 fall short". They fell short, and not
+marginally. From `data/cache/p0aa_e6s.json` on val:
+
+    outers_now 653   outers_if_exit 653   outer_reduction 1.00
+    layer_first_zero [-1, 48, 39, 41, 36, 44, 42, 46, 33, 39, 34, 36, 26, 29, 28, 28, 24]
+
+Every layer but the first now exits on its last outer (48 of 49, 39 of 40, and
+so on), so A1 is already extracting all of the convergence exit there is - the
+1.67x it bought is the whole of that lever, and `outer_reduction` is 1.00
+because the exit is applied, not because it does nothing. Against the plan's own
+uncontended projection the agglomeration is ~36x over its 400 ms budget.
+
+The eps half of A4 is refuted by an experiment already in this log. E12 swept it
+and locked the answer:
+
+    eps 0.05 PASS   0.06 PASS   0.07 PASS   0.08 PASS
+    eps 0.09 FAIL   0.2 merge VOI 0.3619 > 0.3525
+
+0.08 is locked as the largest value that passes. A4 asks for 0.16, double the
+value that already fails, so it does not need running to be answered: it breaks
+the VOI gate and reverts. The plan reasoned from margin ("tightest existing
+margin is ~0.011 of the allowed 0.02") without E12's measured failure at 0.09.
+E12 also measured what eps buys, and it is small: 0.05 -> 1345 inners,
+0.08 -> 939, a 1.43x return for a 1.6x eps. Even a hypothetically passing 0.16
+would be well under 2x against a 36x gap.
+
+The size-asymmetry half - relaxing `sz[r] >= sz[bl]` in `k_propose`, worth up to
+~2x on per-round merge probability - is not refuted and is worth testing. It
+needs the four-threshold VOI gate on val, and val cannot run right now: 4.42 GiB
+against 4.67 GiB free with a 27.4 GiB co-tenant. VOI is a whole-volume metric
+against whole-volume ground truth, so unlike the memory and bit-identity gates
+it does not have a valid cropped form. It waits for an idle card.
+
+Worth stating plainly, because it is the finding that matters more than either
+half of A4: neither lever is the shape of the problem. `above_frac` = 0.0288
+says **97.1% of edge visits are on edges that cannot merge** - the mean is below
+the layer threshold or the endpoints already share a root. A3 removed the
+compaction traffic over those edges but `k_propose` still scans all of them,
+because there is no structure that answers "which edges could merge this round"
+without looking. eps tuning changes how many rounds happen and the asymmetry
+changes how many merges each round lands; neither reduces the 97% waste inside
+a round. Closing a 36x gap means a per-layer adjacency or bucketed-by-weight
+structure so a round touches candidates rather than everything. That is a
+larger change than A4 and it does not risk the partition, which makes it the
+better next move.
+
+## E3 PARTIAL — four-threshold VOI PASS, determinism PASS, memory table done; speed table blocked on an idle card
+
+The accuracy gate is the one that had to survive all of Track A and D1, and it
+did. `scripts/a1_e6t_voi.py --e6s` runs from the cached RAG rather than the
+watershed, so it fits the 4.67 GiB the co-tenant leaves and was runnable when
+nothing else at val scale was.
+
+    aff 0.2  split 0.3707 (limit 0.3979)   merge 0.3350 (limit 0.3525)   PASS
+    aff 0.3  split 0.4512 (limit 0.4738)   merge 0.2505 (limit 0.2611)   PASS
+    aff 0.4  split 0.5162 (limit 0.5378)   merge 0.2268 (limit 0.2381)   PASS
+    aff 0.5  split 0.6129 (limit 0.6309)   merge 0.2184 (limit 0.2293)   PASS
+    ACCURACY GATE: PASS
+
+    unique-parent fingerprint [294165, 322000, 345131, 379293]   locked value
+    merges                    [27835, 23131, 34162, 1796108]     unchanged
+
+Fingerprint and merge counts are bit-for-bit the locked reference, which is the
+real result: A1's convergence exit, A3's compaction, the narrowed HSlot and the
+in-place edge arrays all landed without moving a single voxel. The counts show
+A1 working in the same run that shows the partition unchanged:
+
+    outer  [384, 256, 192, 640] -> [209, 114, 102, 441]   1.7x fewer
+    inner  [565, 377, 292, 1161] -> [390, 235, 202, 962]  1.3x fewer
+
+Same merges, fewer iterations to reach them, which is exactly what a
+convergence exit should look like and is the strongest evidence available that
+it is a no-op on the answer.
+
+Determinism: PASS at every level tested - `d3_dev_check` runs the device path
+twice on one input and compares, `d1_narrow_gate` and `d2_share_gate` compare
+across two independently built libraries, and all four thresholds match the
+host path.
+
+Memory table is complete and, unlike speed, contention-independent, so it is a
+real deliverable rather than a provisional one. Measured at two crop sizes and
+fitted; see `data/cache/d1_mem.json`.
+
+    stage        B/vox    2.16 Gvox stage peak
+    watershed    13.98    42.20 GiB   over both cards, needs D2
+    rag           n/a     21.74 GiB   fits
+    agglom        6.60    23.98 GiB   fits 32 GiB, on the line at 24 GiB
+
+    change                          saved at 2.16 Gvox
+    fragment/label buffer shared     8.05 GiB
+    affinity freed after rag         6.03 GiB
+    agglomeration edges in place     2.06 GiB
+    HSlot 24 B -> 16 B               2.38 GiB
+    ws parent borrows label buffer   3.43 GiB
+    total                           21.95 GiB
+
+Speed table is not deliverable and I am not going to fake it. The card has been
+at 98-100% with a 27.4 GiB co-tenant throughout, and the D3 bench shows what
+that does to a measurement: five runs of one workload spread 1633.9 to 5018.4 ms,
+3.1x between min and max. `d_bench.py` writes `gradeable: false` in that state
+by design. The median-of-5 at 2.16 Gvox and 1.44 Gvox needs D2 to fit at all
+and an idle card to mean anything, and both are E1's dependency, not something
+that can be worked around here.
+
+## E1 BLOCKED — needs hardware I cannot obtain; made it a one-command run instead
+
+E1 is "rent a 3090 Ti". Renting needs an account and a payment method, so it is
+not something I can execute. What I could do is remove every other reason the
+run might not happen, so it is one command on a fresh box.
+
+`scripts/e3_final.py` sequences the gates rather than reimplementing them, since
+a gate living in two places drifts. `--quick` is the crop-scale correctness set,
+safe on a shared card; `--full` adds the val-scale gates and both benches and
+wants the card to itself. It refuses to call any speed number gradeable while
+another process holds memory, and records `card_busy` in the JSON either way.
+
+Current state on the shared 5090, all six correctness gates:
+
+    PASS  d3_device_path        device path identical to host, four thresholds
+    PASS  d1_hslot_narrow       narrow slot identical to wide reference
+    PASS  d2_buffer_share       borrowed label buffer identical to own
+    PASS  d1_memory             per-stage peaks and 2.16 Gvox extrapolation
+    PASS  voi_four_threshold    four-threshold VOI, locked fingerprint
+    PASS  rag_determinism       RAG deterministic and equal to CPU oracle
+    skip  ws_invariants         needs --full
+    skip  bench_host            needs --full
+    skip  bench_device          needs --full
+
+    6/6 passed; speed numbers gradeable: False
+
+The three skipped gates are skipped for one reason: 4.67 GiB free against a
+27.4 GiB co-tenant, where val needs 4.42 GiB. Running them would risk OOM-ing
+someone else's job to produce a timing that contention has already made
+meaningless.
+
+What E1 is actually for, and why it is still worth doing rather than assuming
+the 5090 answers transfer: the 3090 Ti has 6 MB of L2 against the 5090's 96 MB,
+and the two measurements this project made that are most sensitive to that are
+both already set up to re-run. B3 found path compression beats pointer jumping
+1.26x, with the per-round cost within 4% between two kernels doing very
+different amounts of chain work - which said the cost is one random gather per
+voxel over a 720 MB array, not chain length. A 16x smaller L2 is exactly the
+term that could reverse that, which is why `WATERZ_UF_ALGO` was kept rather than
+deleting the loser. C1's warp aggregation is the other one: it won 1.34x by
+removing duplicate atomics, and how much that is worth depends on how much of
+the hash table L2 can hold.
+
+## M1, G0-G3, W1, V1-V2 - the cost model reverses the plan's priorities
+
+The plan I was handed ordered the work agglomeration-first: five of its thirteen
+items (G1-G4 plus the epsilon lever) attack agglomeration, and the watershed
+sits at items six through nine. I built the cost model first, as the plan asked,
+and the model says that ordering is backwards. Not slightly - the agglomeration
+work is close to unnecessary for the *speed gate*, and the watershed is the
+entire problem.
+
+`scripts/m1_cost_model.py` recomputes every projection from the cached JSONs
+instead of asserting it in prose. Its bottom line at 2.16 Gvox on a 3090 Ti,
+after every lever in the plan lands:
+
+    V-lever work factor  3.65x
+    watershed          11435 ms  90.9% of total -- untouched
+    rag                  372 ms
+    agglomeration        706 ms  (18.3x from 12949)
+    extract               73 ms
+    TOTAL              12586 ms = 0.172 Gvox/s, 11.7x over budget
+
+The watershed alone is 10.6x the whole 1.08 s budget. So no amount of
+agglomeration work reaches the gate, and the plan's own headline - "~2.2 s =
+0.98 Gvox/s, roughly 2x short" - was too optimistic by 5.7x. The reason is
+mundane: the plan credits the watershed with going 11.4 s to ~1.5 s from block
+labels, then to ~400 ms "only if the kernel engineering lands", and then adds up
+the optimistic branch of both. The model refuses to spend a factor it has not
+measured, and neither of those two watershed factors has been measured.
+
+What the model *did* get to measure, unexpectedly, is the agglomeration levers -
+all of them, exactly, without a GPU.
+
+### A bit-identical CPU replica turned out to be the whole trick
+
+I have no GPU on this box (`nvidia-smi` missing, no `/dev/nvidia*`, no `nvcc`).
+The obvious move was to write the CUDA and leave it unverified until a card
+appears. Instead I wrote `scripts/g0_agg_ref.py`, a NumPy replica of
+`parhac_e6s_dev`, and pushed it until it agreed with the device on every
+recorded number: 17 layers, 653 outers, 1405 inners, 1853427 merges,
+`sum_nlive` 2691304379, `sum_above`, the per-layer outer and merge vectors, the
+final segment count, and the parent array itself.
+
+Getting there took three real bugs, each of which would have been a silent
+wrong answer on the device too:
+
+`frozen` was allocated once instead of per outer round. The device memsets
+`dfrozen` inside the outer loop; my replica hoisted it out, so nodes froze
+permanently, `szmax` stuck at 3 and the threshold ladder never descended. This
+is the kind of divergence that produces a *plausible* segmentation, which is
+why it took a layer-vector comparison rather than a spot check to find.
+
+Slicing `u[:nlive]` in the restructured mode was wrong because dead edge slots
+are interleaved, not suffixed. The device's `compact_radix` physically compacts;
+my prefix slice processed an arbitrary mixture and produced 402 extra merges. Fix
+was to carry an `alive` mask and compact at layer boundaries the way the device
+does.
+
+Tracking the active set with `np.setdiff1d` over an index list was correct but
+quadratic enough to blow the wall clock on the full graph. Replaced with a
+boolean mask updated incrementally over the dirty edges.
+
+With the replica trustworthy, the lever payoffs stopped being estimates. It
+counts logical work directly, so `m1_cost_model.py` now reads them out of
+`g0_agg_ref.json` rather than guessing:
+
+    g1 freeze_reds (+color)     1636M ->    1.1M node visits
+    g2 dirty-set compaction     1539M ->  197.3M   = 7.8x
+    g3 active edge list         2691M ->   77.6M
+    g3 candidate blue list      3056M ->    5.0M
+    g4 per-outer root list      8523M ->  356.0M
+    g4 per-inner compress       3096M -> 1461.5M
+
+Two of these correct the plan. G2's dirty-set compaction was sold as a 185x
+reduction, from `ndirty_total = 19453169` against a mean `nlive` of 1.86M. That
+ratio is real but it is not the speedup: the compaction still has to *find* the
+dirty edges through a CSR index whose rows it must read, and the measured
+end-to-end work reduction is 7.8x, not 185x. Still the single largest lever, but
+a factor of 24 smaller than advertised. And G1 is worth much more than the plan
+thought, because `k_propose` stops reading `dcolor` once reds are frozen from
+the proposal list, so `k_color` dies along with `k_freeze` - two full node passes
+per outer, not one.
+
+The guard on that data is worth describing because the first version was wrong.
+I initially had the cost model check a `nedge` metadata field to refuse work
+counters harvested from a subgraph. The field was absent from the very file it
+was meant to protect, because the long full-scale run had been launched before
+the field was added, so the check silently fell back to estimates while looking
+like it was working. A later run did write the metadata, but the episode is the
+argument against the design: a guard that trusts a field written by the same
+process it is guarding fails open. It now validates against the device instead.
+A replica that reproduces `p0aa_e6s.json`'s `sum_nlive`, `nmerge` and `ninner`
+to the digit necessarily ran the whole val graph to convergence, and a subgraph
+or a truncated run cannot fake that no matter what it writes about itself.
+
+### Why G2 needs the CSR index, which the replica accidentally proved
+
+The replica finds its dirty set by scanning the live edges, because writing a
+CSR index in NumPy to save NumPy time would have been silly. That accident
+produced the number that justifies the CSR index in CUDA:
+
+    compact_edge_visits   1539103036 ->  197347864
+    dirty_scan_visits              0 -> 1504914171
+
+The compaction itself drops 7.8x, but scanning to *find* the dirty edges costs
+1.505e9 visits - within 2% of the 1.539e9 whole-graph rebuild it was supposed to
+replace. Scan-based dirty-set compaction is therefore not a lever at all; it
+only wins because a sequential 8-byte `(u,v)` read is cheaper per visit than a
+random `atomicCAS` hash probe. The CSR index is what converts that 1.505e9 scan
+into 1.63e8 row reads, and it is load-bearing rather than an implementation
+detail.
+
+Costing it honestly matters too. The plan prices the transpose at its storage,
+"90.3M x 8 B = 1.4 GB, which fits", and says row offsets "fall out of a
+run-length scan for free". Half true: the forward rows are free because
+`compact_radix` already leaves the array sorted by the 64-bit `(u,v)` key, but
+the transpose needs an actual sort by `(v,u)`, one per layer, which is four CUB
+radix passes of read-plus-write over 90.3M keys - 223 ms of the 251 ms the index
+costs. G2 still clears easily, 4709 ms saved against 251 ms spent, but the
+margin is 19x rather than the unbounded win the plan implies, and a design that
+rebuilt the transpose per outer round instead of per layer would lose outright.
+
+### The plan's active-list design is not bit-identical
+
+G3 says to rebuild the active-edge list "once per layer". `k_propose`'s
+predicate is `mean >= TL`, so restricting it to the `mean >= TL` set is indeed
+definitionally identical - but only if the set is current. Merges rewrite edge
+endpoints within a layer, which changes which edges satisfy the predicate. I
+added `--stale-active` to the replica to test the plan's version directly, and it
+diverges. So the active-edge half needs incremental maintenance over the dirty
+set, which means it is not independent of G2 at all; it is the same data
+structure. The candidate-blue half has no such coupling and is implemented
+(`k_propose_bluelist`, `k_pack_listed_fused`, lever bit 4), along with G1
+(`k_freeze_reds`, lever bit 1). Both are behind `WATERZ_AGG_LEVERS` bits so the
+device can diff them against the reference path in one run when a card appears,
+and both type-check - `scripts/nvcheck.py` assembles a fake `CUDA_HOME` out of
+the `nvidia-cuda-*` pip wheels so `clang++ -x cuda -fsyntax-only` works with no
+toolkit and no GPU.
+
+### The V levers are large and the accuracy risk is real
+
+`scripts/v_levers.py` sweeps epsilon and the `sz[r] >= sz[bl]` asymmetry through
+the replica. Combined, epsilon 0.32 with the asymmetry removed cuts logical work
+3.65x while segment count barely moves. That is the biggest single multiplier
+available anywhere in agglomeration, and it costs a parameter change. It is also
+the only lever here that can fail the VOI gate, so it stays quarantined behind
+the four-threshold run.
+
+### W1's premise holds, its L2 claim does not
+
+`scripts/w1_block_analysis.py` reads the real `gpu_fragments.npy` rather than
+reasoning about it. The core premise is confirmed: 538.3M face-adjacent voxel
+pairs, 454.0M of them same-fragment, collapse to 66.5M block face pairs, an 8.1x
+reduction in union sites.
+
+The L2 argument is wrong, though. The plan claims a block-label z-plane-pair is
+5.76 MB and "fits in 6 MB L2". A plane is 5.76 MB, but the hook kernels need a
+three-plane window for the +/-z gathers, which is 17.28 MB. Nothing whole-plane
+fits. What fits is an xy tile: 512^2 blocks over three planes is 3.15 MB and
+covers 6.29M voxels. So the L2 story survives only as *tiled* block labels, and
+W4's "z-tiled `k_flow`" is not an optional extra on top of W1 - it is what makes
+W1's L2 claim true in the first place.
+
+"One uint32 per 8 voxels" is also not enough. Blocks average 1.58 distinct
+fragments and only 62.2% are internally uniform, so a single slot spills on
+37.8% of blocks. Two slots per block is the design point: 1.0 B/vox, 15.1%
+spill, 3.0 GiB saved at 2.16 Gvox - which is 0.5 B/vox less than the 3.5 B/vox
+W2 budgets for the no-slab target, so that arithmetic needs redoing against
+`d1_mem.py` before W2 is called done.
+
+### W0, and the watershed the plan is not talking about
+
+Since the cost model puts the watershed at 90.5% of projected runtime, the next
+thing worth having is the `g0_agg_ref.py` equivalent for `ws.cu`: a CPU replica
+that turns "bit-identical" and "`nfrag == 2175400`" from GPU gates into CPU
+gates. `scripts/w0_ws_ref.py` is the start of it, and building it turned up
+something that has to be settled before any of W1-W4 is written.
+
+`ws.cu` contains three watersheds, not one:
+
+    plateau_basins    ws.cu:703   via watershed_gpu      only caller is g2_ws.py
+    watershed_device  ws.cu:603   via watershed_gpu_d    a few scripts
+    watershed_gpu_e9  ws.cu:1796  via segment/segment_d  production
+
+`src/segment.py` calls `watershed_gpu_e9` and `watershed_gpu_e9_d` from both
+`segment()` and `segment_d()`, so e9 is what produced `gpu_fragments.npy` and
+the locked `nfrag = 2175400`. The plan's W1 text describes "both watershed
+union-finds" and names `k_hook_bidir` and `k_hook_remain`, which are indeed e9's
+kernels - but the two implementations that are easiest to read, and that I
+modelled first, are `plateau_basins` and `watershed_device`, and neither is on
+the production path. Anyone reading `ws.cu` top-down hits the dead ones first.
+
+Having replicated all three, the picture is clean, and it is better news than I
+first thought. Over a sweep of synthetic volumes at every tie density from 2 to
+32 distinct affinity values, 20 cases:
+
+    e9 vs plateau_basins            identical in 20 of 20
+    watershed_device vs plateau_basins  differs in 20 of 20
+
+So `plateau_basins` *is* a valid specification of the production watershed --
+identical fragment counts and identical partitions, from 9 fragments up to 356
+-- and the "G2-locked" comment still means something. It is `watershed_device`,
+reached through `watershed_gpu_d`, that has drifted. That inverts the guess I
+recorded first, and it matters, because it means W1 does not need a replica of
+e9's machinery to be gated: it needs a diff against a 60-line sequential host
+routine that any change can be checked against on a CPU in under a second.
+
+The mechanism of the legacy divergence is in the source. `plateau_basins`
+overwrites each voxel's direction byte with `to_set` as the BFS processes it,
+and `to_set` never contains a reciprocal direction, so once i is processed a
+later-processed reciprocal neighbour j asks `seg[i] & idirmask[d]`, gets false,
+and concludes the edge was never reciprocal. e9's `k_indep_bfs` does exactly
+the same thing, mutating `seg` in place as it pops each voxel, which is why the
+two agree. `watershed_device`'s BFS is the odd one out: it asks the same
+question of an immutable `orig` copy and always gets the original answer.
+
+Two things had to be true for e9's parallelism to preserve the sequential
+result, and both are now checked rather than assumed. First, e9 runs one BFS
+per plateau concurrently while the host runs a single global FIFO; these agree
+because plateaus are the connected components of the reciprocal subgraph, hence
+disjoint, and within a plateau both process that plateau's corners in ascending
+voxel order and then expand FIFO. CUB's radix sort is LSD and therefore stable,
+which is what preserves the ascending corner order inside each plateau group.
+Second, a thread working on plateau p can read `seg[j]` for a j in another
+plateau, but only through a non-reciprocal edge, and `to_set` is always a subset
+of the original bits, so the bit j would need to point back at i is provably
+absent. Cross-plateau interference is impossible.
+
+Three invariants the code depends on silently are now assertions in the
+replica, and all three hold across the sweep:
+
+- `k_count_v2`'s `in_plat` predicate (corner, or has a reciprocal neighbour) is
+  exactly `bits != 0`, which is what makes `vcount[root]` the plateau's voxel
+  count and therefore makes `qsz` correct.
+- the per-plateau BFS never exceeds `vcount[root]`, confirming the `tail <=
+  vcount` argument in `k_plat_meta` on data rather than on the val measurement
+  quoted in its comment.
+- no voxel points at a zero-bit voxel. This one is load-bearing and non-obvious:
+  `k_root_flag` only allocates a label to a root with `bits != 0`, while
+  `k_write_labels` gives every non-zero voxel `psum[parent[i]] + 1`, so if a
+  component's minimum member had `bits == 0` it would be an unflagged root and
+  `psum` at that index is some *other* fragment's label. For raw `k_flow`
+  output this is forced -- `bits[j] == 0` means every face of j is `<= low`, but
+  a neighbour pointing at j does so across a face that is also one of j's and is
+  `> low`. After the divide it is no longer forced, because `to_set` can point
+  at a plateau interior that has just been zeroed, so it is checked explicitly.
+
+### W1 is unsound, and it takes the plan's L2 story with it
+
+With a trustworthy replica in hand, the first thing worth testing is W1 itself,
+because the plan does not treat it as an optimisation but as a prerequisite:
+"one label per 8 voxels is 0.5 B/vox... a z-plane-pair of block labels is
+5.76 MB and fits in 6 MB L2... union operations drop ~8x". It calls this
+Komura equivalence / BKE-3D.
+
+BKE is a real technique and it does not apply here. Komura's block
+decomposition is valid for 8-connected 2D and 26-connected 3D labelling, and
+the reason is specific: under 26-connectivity every pair of voxels inside a
+2x2x2 block is directly adjacent, so any two foreground voxels in a block are
+necessarily in the same component and contracting the block to one label
+discards nothing. This watershed is 6-connected, and its edges are not
+foreground adjacency but flow direction, so neither half of that argument
+survives.
+
+Tested rather than argued. `w0_ws_ref.py --blocks` runs three labellings of the
+same union-find edge set - per-voxel, one-label-per-block, and one slot per
+intra-block connectivity class - on both of the union-finds W1 proposes to
+convert, across the same 20-case sweep. One label per block is wrong in 40 of
+40 checks, and not marginally: it collapses 7 to 790 true components into 1 to
+3. Contracting blocks in a dense 6-connected flow graph makes almost the whole
+block adjacency graph one component.
+
+The sound form is one slot per intra-block class, which is exact by
+construction because it is the same union-find on the same edges with the
+parent array indexed differently. But the sweep measures the class count at a
+mean of 2.26 to 5.55 per block and a maximum of 8. Eight uint32 slots is
+4 B/vox, which is exactly what the per-voxel array already costs. So the sound
+version of W1 saves nothing, and the unsound version is wrong.
+
+The synthetic volumes are more fragmented than real data, so those means are
+pessimistic. The real-data measurement points the same way though, and it is
+already in `w1_block_analysis.json`: 37.77% of 2x2x2 blocks on val contain two
+or more distinct fragments. A single label per block cannot represent those
+blocks, whatever the mechanism. What does survive from W1 is the union-site
+reduction - 454.0M same-fragment voxel pairs collapsing to 66.5M block face
+pairs, 8.1x - but that is a traffic argument for tiling, which is W4, not a
+reason to change the label representation.
+
+### W2 closes anyway, via a lever the plan did not consider
+
+Losing W1's -3.5 B/vox should have killed W2, the one hard blocker. It does
+not, and `scripts/w2_mem.py` does the arithmetic from `d1_mem.json`.
+
+The plan's own numbers do not work even before W1 is withdrawn. Its three
+savings are -3.5, -4 and -1.43 B/vox against a measured 13.988, leaving 5.058
+B/vox of scratch = 10.18 GiB, and the peak is scratch plus the affinity input
+plus the label buffer: 6.03 + 8.05 + 10.18 = 24.26 GiB. That is over the 24 GiB
+card, not the "~23 GiB" claimed, and before any allowance for driver context.
+
+The lever that rescues it is one the plan never mentions: **stream the
+affinity**. `k_flow` is the affinity's only consumer in the entire watershed,
+so 6.03 GiB of input has no business being resident alongside the union-find
+scratch. Upload it in z-slabs for `k_flow` alone and it stops counting toward
+the peak. That is more than block labels were ever going to save, it is
+obviously correct, and it is a change to the allocation schedule rather than to
+the algorithm. Two more of the same kind: `vcount` is only ever read as
+`vcount[plat_root[p]]` in `k_plat_meta`, so it needs one entry per plateau
+rather than per voxel (-8.05 GiB), and e9c holds `flag` and `psum` as separate
+per-voxel arrays when e9b already demonstrates the in-place-scan trick with
+`k_scatter_idx_u32` recovering the predicate from the scan's own differences
+(-8.05 GiB). Plus the uint32 BFS queue the plan did list (-2.88 GiB).
+
+    peak measured                    42.22 GiB
+    after the four sound levers      17.22 GiB   fits in 23 GiB usable
+    plan's own arithmetic            24.26 GiB   does not fit
+
+One honest caveat, recorded in the script rather than buried: streaming the
+affinity and the e9c scan apply to different phases, and only the phase that
+owns the peak actually pays. `ws_mem_peak_lines()` already attributes the peak
+to a source line and `d1_mem.py` already reads it, so 17.22 GiB is a lower
+bound on what the levers achieve until that attribution is run on a card. The
+margin to 23 GiB is wide enough that the verdict is unlikely to flip, but it is
+a projection, not a measurement.
+
+### The feasibility verdict, with the watershed finally costed
+
+The watershed had no byte model. It was 90% of the projection and was being
+estimated by scaling one idle val measurement by 12x and a bandwidth ratio,
+which is not evidence you can decide feasibility on. `m1_cost_model.py` now
+costs it the same way it costs the agglomeration kernels: essential traffic per
+pass times the passes the algorithm actually performs.
+
+    k_flow: affinity read + bits write          8.6 GB  x1      10.2 ms
+    hook rounds, cold neighbour gathers       997.9 GB  x14    1178.6 ms
+    compress rounds                           241.9 GB  x14     285.7 ms
+    divide: corner flag, vcount, BFS           36.7 GB  x1      43.4 ms
+    label: root flag, scan, write              25.9 GB  x1      30.6 ms
+    untiled total                              1311 GB         1548.5 ms
+    xy-tiled + W3                               553 GB          653.2 ms
+
+Two things fall out. First, the stage as it stands is **7.4x off its own
+roofline** - 11435 ms projected against 1548 ms of untiled essential traffic.
+That is the strongest possible confirmation of W4's premise: `grep` for
+`__shared__`, `__shfl`, `warp` in `ws.cu` returns nothing, and the cost of that
+is a factor of seven, not a rounding error. The watershed is not
+bandwidth-bound, it is implementation-bound.
+
+Second, and this retires W1 completely: the L2 residency W1 was supposed to buy
+comes from tiling, not from the label representation. The hook kernels need a
+three-plane window for their +/-z gathers. At 2.16 Gvox that is 69 MB of
+per-voxel labels, and 17 MB even with block labels, so the plan's "block-label
+z-plane-pair = 5.76 MB and fits in 6 MB L2" was comparing against the wrong
+working set. What does fit is an xy tile: 512x512 over three planes is 3.15 MB
+of *per-voxel* labels. Tiling gives residency on the 4 B/vox array directly,
+with no change to the label representation and no soundness question.
+
+The round count is the one remaining scaling assumption, and it holds. The
+plan's argument that "iteration counts stay constant" is measured and true for
+agglomeration because `make_big.py` mirror-tiles into 12 disjoint copies of the
+graph, but a union-find's round count depends on the longest chain it collapses
+and the graded volume is 3x2x2 tiles, so chains along an axis get up to 3x
+longer. Measured in the replica across a 12x volume range, both union-finds
+stay at 3-5 rounds. That is what full path compression every round buys: the
+count is logarithmic in chain length, so 3x longer chains cost about 1.6 extra
+rounds, not 3x more.
+
+So, the verdict the plan's title promises, now derived rather than asserted:
+
+    best case, every sound change landing perfectly
+      watershed        537 ms   xy-tiled (W4) at its own essential traffic, W3
+      rag              180 ms   r1 target
+      agglomeration    760 ms   G levers + V levers, all measured
+      extract           73 ms
+      TOTAL           1550 ms = 1.393 Gvox/s, 1.44x over budget
+
+W3 in that figure is narrower than the plan's version and is exact rather than
+approximate. `k_hook_bidir` skips a voxel with no direction bits and only hooks
+reciprocal edges, so a voxel with no reciprocal edge issues no hook at all;
+launching over the compacted list of voxels that have one is definitionally the
+same kernel, which is the same argument that makes g3's active-edge list exact.
+That is 35.6% of the volume and it applies to the plateau half only, because
+after the divide almost every voxel carries a bit and the basin hook has no
+such list to restrict to. The label pass also drops from three 4 B/vox touches
+to a 1 bit/vox flag bitmask with the scan running over per-word popcounts.
+
+**The priority inverts once those land, and this is the thing to carry
+forward.** With the watershed at 537 ms, agglomeration at 760 ms is the largest
+single term in the pipeline - which is the opposite of the situation the
+un-optimised numbers describe, where the watershed is 90.5% and agglomeration
+is 6%. Watershed plus RAG plus extract at their achievable figures is 790 ms,
+so 2 Gvox/s leaves agglomeration 290 ms, and the measured lever stack plus the
+V levers reaches 760. The gate therefore needs a further 2.62x in agglomeration
+that nothing in the repo identifies, or fewer union-find rounds in the
+watershed. Both are algorithm changes rather than better implementations of
+what is there, and that is the honest reason 2 Gvox/s is not reachable from
+this design.
+
+It also means G2 and G4 are worth writing after all. I had deprioritised them
+on the grounds that agglomeration was 6% of the projection, which was only true
+because the watershed was unoptimised; against the achievable watershed they
+are half the remaining budget.
+
+Worth noting the projection is *better* than the plan's own 0.98 Gvox/s, at
+1.296. The plan was pessimistic about the achievable figure and optimistic
+about the mechanism: it expected to get there through block labels, which do
+not work, and it under-credited both the agglomeration levers and tiling.
+
+### W4: the tiled hooks are written, and verified without a card
+
+Since the byte model puts 7.4x of slack in the two hook kernels and identifies
+the launch shape as the cause, that is where the code went. `k_hook_bidir` and
+`k_hook_remain` now have tiled counterparts, `k_hook_bidir_tiled` and
+`k_hook_remain_tiled`, selected by `WATERZ_UF_ALGO=2` alongside the existing
+0 and 1 that B3 used to compare path compression against pointer jumping.
+
+The change is entirely launch geometry and staging. `vox_grid` gives a block
+256 consecutive x inside a single (y,z) row, so a block's +/-y neighbour is
+X*4 bytes away and its +/-z neighbour X*Y*4 -- 23.04 MB at 2.16 Gvox, which
+misses a 6 MB L2 on every one of six gathers per voxel per round, fourteen
+rounds. The tiled version takes a 32x4x4 tile with its one-voxel halo, which is
+34x6x6 = 1224 slots, stages 1224 parent words and 1224 direction bytes with 512
+threads, and then does all seven accesses per voxel out of shared memory: 2.39
+global loads per voxel instead of 7, and the survivors sit inside a three-plane
+window of 32-voxel rows instead of scattered across the volume.
+
+Why staleness is not a correctness question, which is what makes this safe to
+write without being able to run it: every write is `atomicMin` into a root's
+parent slot, so parent entries only ever decrease; the round loop already runs
+to convergence and reports failure to converge; and the fixed point of
+min-index hooking is the component minimum for any read order. The untiled
+kernel is already reading values other blocks are concurrently modifying, so
+tiling changes how stale the reads are, not whether they can be.
+
+What would break it is dropping or inventing an edge, and a halo off-by-one is
+the obvious way to do that. So that is what got tested. `w0_ws_ref.py` now
+carries `tiled_hook_edges`, which replicates the kernel's index arithmetic
+literally -- `ws_sidx`, the `(gx, gy, gz)` bounds test, the inert `bits = 0`
+fill for out-of-volume slots -- and diffs the resulting edge set against
+`untiled_hook_edges` taken straight from `k_hook_bidir`'s source. Shapes were
+picked so tiles land unevenly on every axis: X of 33, 35 and 40 against a tile
+of 32, Y of 5, 6 and 7 and Z of 5, 8 and 9 against a tile of 4, plus a 4x4x4
+volume smaller than one tile.
+
+    plateau hook, k_hook_bidir_tiled    15 cases, 0 mismatches
+    basin hook, k_hook_remain_tiled     12 cases, 0 mismatches, on the
+                                        divided field rather than the raw one
+
+Both files pass `clang++ -x cuda -fsyntax-only` through `scripts/nvcheck.py`.
+That is as far as verification goes without a card: the edge sets are proven
+equal and the convergence argument is proven independent of read order, so what
+remains unmeasured is only whether the shared-memory staging actually recovers
+the 7.4x, which is a performance question rather than a correctness one.
+
+## LICENSES PASS
+
+command: read of csrc/parhac_d.cu:146 (k_scale_sm_bytes) and csrc/ws.cu:1221 (k_uf_jump comment)
+method: two facts the later levers treat as licenses, written down before the CUDA that depends on them
+
+1. Contact sums are exact integers. `k_scale_sm_bytes` multiplies every `sm`
+   by 255 and stores the rounded result in a double. Affinities are uint8/255,
+   so the true sum is k/255 for an integer k, and k is bounded by
+   255 * 3 * nvox = 1.65e12 at 2.16 Gvox, inside the 2^53 exact-integer range
+   of a double. atomicAdd on those values commutes. Dirty-set dedup (G2) and
+   the RAG shared table (R1) are therefore order-independent in their sums,
+   not approximately so.
+
+2. The watershed union-find gate pins the fixed point, not the path. Both
+   e9b and e9c already run to convergence and report NOT-CONVERGED rather
+   than absorbing a cap. The comment above `k_uf_jump` states the license:
+   the settled state is "every entry holds its component's minimum index"
+   either way. Any rewrite that applies the same min-index hooks and runs
+   to the same fixed point is bit-identical. That is what makes W5 a
+   reordering of the edge set rather than a different algorithm.
+
+## W5 CPU-VERIFIED
+
+command: python3 scripts/w0_ws_ref.py --sweep --w5; python3 scripts/w5_tile_uf.py --crop 125 256 256
+method: two-phase min-index union-find vs one-phase; stitch rounds on real fragments
+
+    parent arrays identical in 120/120 synthetic checks (3 shapes including
+    uneven tiles, 5 level counts, 4 seeds, plateau and basin each)
+    e9 vs host: 0 diffs in the same 60 cases
+    14/14 tilings on the 8.19 Mvox fragment crop: parent identical
+
+Stitch payoff, tree graph (the pessimistic bound, a flow-like forest),
+8x16x32 tile (the compiled default, 20 KB shared):
+
+    baseline rounds 5, stitch rounds 5, hook list 0.382 of volume,
+    compress list 0.456 of volume. Round count does not drop. Compress
+    work drops because the domain does.
+
+CUDA: `k_uf_tile_local<Recip>`, `k_w5_hook_list`, `k_w5_compress_list`,
+`w5_union_find` behind `WATERZ_UF_ALGO=3` at both e9b and e9c.
+`clang++ -fsyntax-only` PASS.
+
+## W3 CPU-VERIFIED
+
+command: python3 scripts/w0_ws_ref.py --sweep --w5
+method: bitmask label_of vs exclusive-scan psum; nonempty-tile edge check
+
+    bitmask labels identical in 60/60, nfrag match, ndiff=0
+    edges into an all-zero tile: 0
+
+CUDA: `k_root_mask`, `k_block_popc`, `label_of`, `k_write_labels_mask`
+behind `WATERZ_WS_W3`. Empty-tile early-out inside `k_uf_tile_local`.
+The original compacted-voxel-list form was not written: it would destroy
+the locality W4/W5 exist for, and `bits != 0` on val is almost the whole
+volume after the divide, so a voxel list would not shrink the basin UF.
+
+## G2 G3 G4 WRITTEN
+
+command: python3 scripts/nvcheck.py csrc/parhac_d.cu
+method: lever bits 2 and 8 wired; bit 4 gains the active-edge list
+
+    2  hash_combine_dirty: rewrite only edges whose current endpoints are
+       this inner's merged blues or receiving reds, hash-dedup that set,
+       write combined edges into vacated holes, leave nscan as the
+       high-water mark. Licensed by the collision lemma in g0_agg_ref.py
+       and by sm integrality.
+    4  k_propose_listed over an amask packed after each dirty compact
+       (incremental) or after a full combine (rebuild). The once-per-layer
+       refresh is still rejected; --stale-active diverges.
+    8  listed k_copy_sz over current roots; per-inner k_compress over
+       accepted blues only.
+
+Device fingerprint gate is scripts/g_levers.py, blocked on a card.
+
+## R1 CPU-VERIFIED
+
+command: python3 scripts/r1_rag_tile.py
+method: face-count edge map on a 40x128x128 crop of gpu_fragments.npy
+
+    38797 edges, tiled union identical, count-equal
+    C1 warp atomics 132183, R1 tile flushes 65834, 2.01x fewer global
+    atomic sequences
+
+CUDA: `k_hash_faces_tiled` 32x4x2 block, 1024-slot shared table, overflow
+falls back to `hash_add_group`. `WATERZ_RAG_ALGO=1`.
+
+## HARNESS
+
+    scripts/w_levers.py          CPU W5/W3 identity; device A/B deferred
+    scripts/nvcheck.py           SRCS now includes csrc/rag.cu
+    scripts/e3_final.py          --gpu-window refuses on a busy card, then
+                                 nvcheck, g_levers, w_levers, b1, c2,
+                                 four-threshold VOI, d_bench
+
+## M1 REPROJECT
+
+command: python3 scripts/m1_cost_model.py
+method: W5 term from the measured stitch domain (0.46 of volume, 5 rounds
+plus one flatten) replacing the tiled-only 14 full-volume compresses
+
+    watershed best case  537 ms -> 281 ms
+    end-to-end best case 1550 ms / 1.393 Gvox/s -> 1294 ms / 1.670 Gvox/s
+    budget 1080 ms, still 1.20x over
+    agglomeration 760 ms against 546 ms allowed: needs a further 1.39x
+    that is not identified
+
+W5 did not cut union-find rounds. That is a measured fact on the real
+fragment geometry, not a model assumption. The residual is still an
+algorithm change in agglomeration or a watershed that converges in fewer
+rounds, which this design does not.
+
+## G4 COMPLETE CPU-VERIFIED
+
+command: python3 scripts/g0_agg_ref.py --mode both --out g0_agg_ref.json
+method: incremental root list + skip per-outer nnode rebuild; assert
+incremental sz[roots] == rebuild every outer
+
+The previous bit-8 path rebuilt the root list with an exclusive_scan of
+all nnode every outer and still ran k_compress / k_zero_sz / k_rebuild_sz
+over the full volume. That is more work than k_copy_sz, so the lever was
+a net loss. What landed:
+
+    k_init_root_list once (roots = 1..nnode-1)
+    after each accept: k_compact_roots keeping parent[r]==r
+    per outer: k_clear_frozen_list + k_copy_sz_list only
+    skip compress/zero/rebuild: k_accept_reds already keeps sz[root]
+
+Full-val RAG, T=0.3, eps=0.08, to convergence:
+
+    base matches p0aa_e6s.json digit-for-digit (n_layer, nouter, ninner,
+    nmerge, sum_nlive, sum_above, both 17-element layer vectors)
+    parent array bit-identical base vs fast
+    inc_sz_ok = 653 / 653 outers
+    compress_node_visits 3096M -> 41.0M (75.5x)
+    outer_node_visits 8523M -> 356M (23.9x)
+
+CUDA: WATERZ_AGG_LEVERS bit 8. clang++ -fsyntax-only PASS.
+
+## V1 V2 WIRED
+
+    WATERZ_AGG_EPS          overrides locked 0.08 in segment.py
+    WATERZ_SIZE_ASYM=0      drops sz[red] >= sz[blue] in every propose
+                            kernel via d_size_asym
+    e3 --gpu-window         now runs a1 twice more, once with each
+
+V2 CPU: g0 --no-size-asym --sub 80000 --max-layer 2 PASS (parent + counters).
+Four-threshold VOI is still a card.
+
+## G0 FULL-VAL PASS
+
+command: python3 scripts/g0_agg_ref.py --mode both --out g0_agg_ref.json
+method: CPU replica of parhac_e6s_dev vs fast G2/G3/G4, whole val RAG
+
+    nedge=7505458 nnode=2175401
+    base 381.4s  fast 186.8s
+    nseg=321973  nmerge=1853427
+    G0 PASS
+
+m1_cost_model.py now consumes this file (it refused subgraph visit ratios).
+
+## M1 REPROJECT AFTER G4
+
+command: python3 scripts/m1_cost_model.py
+method: full-val G0 visit ratios; G2 residual is the endpoint scan, not CSR
+
+    agglomeration after G levers          1719 ms (7.5x from 12949)
+    after G + V (subgraph 3.65x)           470 ms
+    best case e2e                         1004 ms = 2.151 Gvox/s
+    budget                                1080 ms, 0.93x of budget
+
+On this model the 2 Gvox/s gate is reachable. That is not a claim it is
+hit: V is still a subgraph factor, W5/R1 are byte models, no G lever has
+run on a device.
+
+Idle-card command, refuses if nvidia-smi shows other compute apps:
+
+    python3 scripts/e3_final.py --gpu-window
+
+## V FULL-VAL
+
+command: python3 scripts/v_levers.py
+method: CPU replica on whole val RAG; locked row reused from g0_agg_ref.json
+
+    v1 eps=0.08           1.00x  nseg=321973
+    v1 eps=0.12           1.39x  nseg +1
+    v1 eps=0.16           1.69x  nseg -22
+    v1 eps=0.24           2.21x  nseg -63
+    v1 eps=0.32           2.88x  nseg -75
+    v2 eps=0.08 no-asym   1.19x  nseg -10
+    v1+v2 eps=0.32        3.19x  nseg -219
+
+Layer 0 stays at the 64-outer cap except v1 eps=0.32 (63). The subgraph
+3.65x was too high. Every unlocked config changes nseg and owes VOI.
+
+## M1 AFTER FULL-VAL V
+
+command: python3 scripts/m1_cost_model.py
+
+    V factor 3.65x (sub) -> 3.19x (full val)
+    agglomeration after G+V  470 ms -> 539 ms
+    best case e2e           1004 ms -> 1073 ms = 2.013 Gvox/s
+    0.99x of the 1080 ms budget
+
+Still a model, not a measurement. The 7 ms of slack disappears if W5
+or R1 miss their byte-model targets.
+
+## E3 GPU-WINDOW FIXED
+
+command: python3 scripts/e3_final.py --gpu-window
+method: card_state is idle / busy / none; PY falls back to sys.executable
+
+    none: CPU gates only (nvcheck, w_levers, r1). v_levers skipped
+          when v_levers.json is already full-val.
+    busy: refuse, write e3_gpu_window.json status=refused
+    idle: CPU + g_levers + VOI x3 + d_bench
+
+This machine: 3/3 CPU PASS, gpu_blocked listed. Previously
+--gpu-window treated missing nvidia-smi as busy and refused, and
+hard-required .venv/bin/python which does not exist here.
+
+## E3 GPU-WINDOW GREENGOBLIN IDLE
+
+command: PATH=/usr/local/cuda-12.8/bin:$PATH .venv/bin/python -u scripts/e3_final.py --gpu-window
+host: v@100.90.97.111 (greengoblin) RTX 5090, idle 16 MiB 0% throughout the window
+artifacts: data/cache/greengoblin_20260905/
+
+    nvcheck             PASS  22.9s  nvcc -c (no clang on the box)
+    w_levers            PASS   1.1s  UF 0/1/2/3 and W3 CPU identity
+    r1_rag_tile         PASS   0.8s
+    g_levers            PASS  26.6s  bits 1,2,4,8,15 all BIT-IDENTICAL
+    rag_determinism     PASS   7.7s
+    ws_invariants       PASS  14.2s  nfrag=2175400 bg=506568 oracle-equal
+    voi_four_threshold  PASS 106.7s  locked fp [294165, 322000, 345131, 379293]
+    v1_voi              INVALID PASS 103.3s  (see below)
+    v2_voi              FAIL 103.6s  real accuracy miss
+    bench_device        PASS  12.1s  val 180 Mvox, not the graded 2.16 Gvox
+
+G-levers on idle 5090, T=0.3, nmerge=1853427, 17 layers, 653 outers:
+
+    bit 0 reference     471.8 ms
+    bit 1 freeze_reds   456.5 ms  1.03x  identical
+    bit 2 dirty-scan    409.6 ms  1.15x  identical
+    bit 4 active-lists  456.2 ms  1.03x  identical
+    bit 8 root-list     436.7 ms  1.08x  identical
+    bit 15 all          317.6 ms  1.49x  identical
+
+Locked four-T VOI (eps=0.08) matched the fingerprint and passed +0.02 at
+every T. C2 fingerprint fff9037cab341692be0c9bf3c577d4ff.
+
+V1 window PASS was a lie. a1_e6t_voi.py hardcoded ctypes.c_double(0.08),
+so WATERZ_AGG_EPS=0.16 never reached parhac_paper_d_timed. E6s printed
+eps=0.0800 and the locked fingerprint. Fixed a1 to read WATERZ_AGG_EPS
+the same way segment.py does.
+
+command: WATERZ_AGG_EPS=0.16 .venv/bin/python -u scripts/a1_e6t_voi.py --e6s
+method: same idle 5090, after the a1 fix; A1 eps=0.16 and E6s eps=0.1600
+
+    fingerprint [294101, 321923, 344984, 378629]
+    T=0.2  split 0.3754  merge 0.3715 > 0.3525  FAIL
+    T=0.3/0.4/0.5 PASS
+    ACCURACY GATE: FAIL
+
+V2 (WATERZ_SIZE_ASYM=0) did apply. Fingerprint
+[294142, 321960, 345010, 379008].
+
+    T=0.2  split 0.3718  merge 0.3564 > 0.3525  FAIL
+    T=0.3/0.4/0.5 PASS
+    ACCURACY GATE: FAIL
+
+Both unlocked V configs are accuracy-illegal. Do not ship them. Do not
+tune G-series to chase them.
+
+d_bench --device default aff is cremiA_val (125x1200x1200 = 180 Mvox):
+
+    G0   median 1082.2 ms  0.166 Gvox/s  nseg=321973  idle  gradeable-on-this-card
+    G15  median  958.7 ms  0.188 Gvox/s  nseg=321973  deterministic
+
+command: WATERZ_AGG_LEVERS=15 .venv/bin/python -u scripts/d_bench.py --device
+
+These are 5090 numbers on the val crop. They are not the TASK 2 Gvox/s
+claim (3090 Ti, [3,375,2400,2400]=2.16 Gvox). 2.16 Gvox was not run:
+d1_mem puts the watershed peak at 42.20 GiB and this card is 32 GiB;
+z-slabbing is not landed.
+
+## E1 T=0.3-ONLY VOI
+
+command: .venv/bin/python -u scripts/e1_t3_voi.py
+host: greengoblin CPU (gt.h5); voi_numpy matches waterz test_evaluate
+method: g0 fast replica + H(seg|gt)/H(gt|seg); skip gt==0
+
+    T=0.3 split<=0.4738 merge<=0.2611
+    v1 eps=0.08          split 0.4512 merge 0.2505  PASS  (device locked)
+    v1 eps=0.12          split 0.4491 merge 0.2414  PASS  outers=483  1.39x
+    v1 eps=0.16          split 0.4536 merge 0.2396  PASS  (device)
+    v1 eps=0.24          split 0.4498 merge 0.2565  PASS  outers=280  2.21x
+    v1 eps=0.32          split 0.4451 merge 0.2509  PASS  outers=227  2.88x
+    v2 eps=0.08 no-asym  split 0.4570 merge 0.2421  PASS  (device)  1.19x
+    v1+v2 eps=0.32       split 0.4529 merge 0.2630  FAIL  0.2630>0.2611
+
+Uniform V is still illegal (T=0.2). T=0.3-only V is legal up to eps=0.32
+with the asymmetry on, and for no-asym at locked eps. Combined 0.32
+no-asym dies at T=0.3 by 0.0019. Best speed-path parameter: eps=0.32
+size_asym=1 at T=0.3 only.
+
+## E2 CSR DIRTY-COMBINE
+
+command: python3 scripts/e2_csr.py --sub 80000; python3 scripts/e2_csr.py --sub 0 --ref-json data/cache/g0_agg_ref.json
+
+    sub 80k:  parent identical, cut 5.3x, E2b theta=0.5 identical
+    full val: nmerge=1853427 nseg=321973, per-inner CSR set == scan
+              lookup+splice 390M vs scan 1505M = 3.9x
+              rebuild 68M, not fatter than the scan
+
+Identity holds. The 10x compact-byte gate fails. Dead slots on spliced
+lists keep lookup at 349M against ndirty_total 163M. Not the 750x the
+nscan/ndirty_mean ratio suggested.
+
+## E3 LAYER 0
+
+command: python3 scripts/e3_layer0.py --sub 80000
+
+    cap64 pinned. cap128 goes to 76 outers, +13 merges, partition moves.
+    sub no-asym exits at 48. Full-val v_levers: layer 0 stays at 64
+    except v1 eps=0.32 (63). No new matching. no-asym is E1's lever.
+
+## E4 REPRESENTATIVE STITCH UF
+
+command: python3 scripts/e4_rep_uf.py --crop 32 128 128
+
+    20/20 parent-identical (dense+tree, W5 tiles + uneven 5x7x33,
+    9x5x40, 4x4x4). max rep_frac=0.241 (tree 4x4x4) vs W5 0.46.
+    default 8x16x32 tree: 41877 reps, frac=0.080.
+
+## E5 W2 PROOFS
+
+command: python3 scripts/e5_w2_proofs.py
+
+    only k_flow reads aff[]. vcount-per-root would drop 98.5% of the
+    array on a 32x256x256 fragment crop. w2 17.22 GiB stays a lower
+    bound, not a measurement. Peak line 1346 in d1_mem.
+
+## E6 RECALIBRATED STACKS
+
+command: python3 scripts/e6_recal_m1.py
+method: idle 5090 G0/G15 e2e, G15 phases, E1 vfac=2.88, E2 3.9x on
+        compact, E4/W5 byte-model WS. Scale x21.333 to 2.16 Gvox 3090 Ti.
+
+    stack 1 locked G15 untiled WS     20452 ms  0.106 Gvox/s  18.94x
+    stack 2 +E2 +W4/W5 no V            5785 ms  0.373 Gvox/s   5.36x
+    stack 3 +E1 eps=0.32 T=0.3         3619 ms  0.597 Gvox/s   3.35x
+
+DESIGN SHORT. Stack 3 is 3.35x the 1080 ms budget after every measured
+lever that passed. Do not start CUDA for E2/E4/E5 on the hope they
+close 2 Gvox/s. They do not. The remaining gap is still an unidentified
+algorithm change (fewer WS rounds, or an agglomeration that is not
+ParHAC), not an implementation of what is already in the tree.
+
+## N0 HONEST E6
+
+command: python3 -u scripts/n0_honest_e6.py
+method: extract=3.434 ms (LOG E10); leftover 96.08 ms attributed three ways
+
+    leftover→WS (honest)   1642 ms  1.315 Gvox/s  1.52x   agg must be ≤587 ms (1.96x)
+    leftover→alloc         3692 ms  0.585 Gvox/s  3.42x   (old E6 extract dump)
+    leftover→sync          1738 ms  1.242 Gvox/s  1.61x
+    +WS/RAG reflect        1205 ms  1.793 Gvox/s  1.12x   (N4, not a 12x claim)
+
+Wrote data/cache/e6_recal_honest.json. Not a TASK number.
+
+## N1 T=0.3 SHALLOW REGRADE
+
+command: python3 -u scripts/n1_t3_regrade.py
+method: chunked mmap VOI; C++ Kruskal/mutex/frozen CC; no 180 Mvox labels
+
+    KEEP=0
+    X0 / hist-q frozen / waterfall-full   merge 7.55 FAIL giant
+    mutex AbsMax                          split 0.9097 FAIL
+    Zlateski 256/1024                     split 1.06/0.80 FAIL
+    rel-contact 0.05/0.10                 merge 0.346/0.280 FAIL
+    waterfall 1/2 pass                    split 1.90/0.96 FAIL
+
+Four-T death is T=0.3 death for every shallow class.
+
+## N2 HIGHER EPS T=0.3
+
+command: python3 -u scripts/n2_higher_eps.py
+
+    eps=0.40  split 0.4408 merge 0.2543  PASS  sum_nlive=894217121  3.01x vs locked
+    eps=0.48  split 0.4422 merge 0.2892  FAIL  STOP
+    extra vs E1 eps=0.32: 1.04x. Not 1.96x.
+
+## N3 RAG STRUCTURE
+
+command: python3 -u scripts/n3_rag_structure.py
+
+    mean==1 65256; mean>0.9 6.76M; mean>T 6.91M; prefilter edge cut 1.09x
+    mean deg 6.90; locked visits/merge ~1152 (E2 already owns that slack)
+    prefilter mean>T: fp≠locked, work 1.19x, T=0.3 VOI PASS 0.4527/0.2513
+    sat mean==1 prefix: leftover 49586, merge VOI 7.87 FAIL giant
+
+## N4 MIRROR / SEAM
+
+command: python3 -u scripts/n4_mirror_identity.py
+    reconstructed make_big seams identically 0 (synthetic). No make_big.py /
+    affinity.h5 on disk. Not a 12x throughput claim. N5 does not take 1.18x.
+
+## N6 STOP
+
+Wrote notes/N6_STOP.md. N5 CUDA gate: need 1.96x, best new factor 1.04
+(ε=0.40) or 1.19 (prefilter). Neither ≥1.95. No CUDA. Honest stack still
+1.52x over 1080 ms after every legal lever that passed.
+
+## P1 OFFICIAL MAKE_BIG INDEPENDENCE
+
+command: ssh greengoblin .venv/bin/python -u scripts/p1_make_big_indep.py
+machine: greengoblin RTX 5090 idle; official make_big.mirror; GPU WS + CPU scans
+    dataset already on greengoblin; no volumes copied to the laptop
+
+    val GPU == wz_fragments.npy byte-identical; nfrag=2175400 bg=506568
+    axis z/y/x: seam_zero, span=0, mir_nfrag=val, concat_nfrag=2*val,
+    tile0==val remap, tile1==mir remap, all cross-seam aff=0
+    P1 PASS. 12 merge-independent tiles. Not a 12x or 2 Gvox/s claim.
+
+## P1b FLIP EQUIVARIANCE
+
+command: ssh greengoblin .venv/bin/python -u scripts/p1b_flip_equiv.py
+
+    flip(WS(val)) != WS(mirror(aff)) on every axis
+    z disagree 9.90M (5.5% interior, 125/125 planes)
+    y disagree 26.92M (15.0% interior, 1200/1200 planes)
+    x disagree 12.57M (7.0% interior, 1200/1200 planes)
+    1x-val+stamp illegal. halo_only=False.
+
+## P1 GATE
+
+command: python3 -u scripts/p1_gate.py
+
+    8 unique flip tiles * 958.70 ms = 7669 ms (5090) / 13635 ms (3090 model)
+    8.3x slower than fused honest 1642 ms; 12.6x the 1080 ms budget
+    reopen_speed_path=False. start_w2_reflect_stamp_cuda=False. keep_n6=True
+    Wrote notes/P1_GATE.md
+
+## P2 TRUE HISTOGRAMQUANTILE
+
+command: ssh greengoblin .venv/bin/python data/ws_bounty/baseline/run_baseline.py
+         --candidate data/ws_bounty/q20_quantile/mine_thr{0.2,0.3,0.4,0.5}.h5
+
+    T=0.2 0.3754/0.3299 PASS
+    T=0.3 0.4521/0.2422 PASS
+    T=0.4 0.5180/0.2180 PASS
+    T=0.5 0.6103/0.2094 PASS
+    ACCURACY GATE PASS. Serial BinQueue. Not a 1.96x fused-agg cut. Class closed.
+
+## A CLUSTERED-GRAPH / PARHAC §2.3 READ
+
+command: python3 -u scripts/a_clustered_cpu.py
+papers: parhac_dhulipala2022.pdf p.6 §2.3, p.22-23 MultiMerge, p.23 Affinity/SCC,
+        D.3 CPAM=HT runtime; dynhac_yu2025.pdf §1-3 good-merge
+
+    7-11x is Affinity/SCCsim GBBS vs clustered-graph, NOT ParHAC.
+    E2 CSR already is MultiMerge: identical=True cut=3.86x (e2_csr_full.json).
+    layer0 ~20660 merges/outer — not the paper ε=0.01 small-round regime.
+    Honest stack already credits E2. start_gpu_starmarge_v2=False.
+    keep_n6_on_work=True. SOURCES S32 corrected; S39 DynHAC; S40 d1 peaks.
+
+## B W2 FREE AFF AFTER K_FLOW
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_w2_free_aff.py
+    rebuilt src/libws_gpu.so; idle 5090; host e9c_watershed only
+
+    nfrag=2175400 oracle array_equal=True leaked=0
+    val peak 3.536 -> 3.033 GiB (saved 0.503 = val aff)
+    pred 2.16 Gvox WS 36.40 GiB (still over 23 usable)
+    e9_d / segment_d aff left in place for RAG
+    Wrote notes/B_W2.md
+
+## B DEVICE-PATH AFF PARK
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_dev_aff.py
+    rebuilt src/libws_gpu.so; ws_flow_d + park + ws_label_d
+
+    nfrag=2175400 oracle=True held==park labels
+    tracked peak 2.698 -> 2.195 GiB (saved 0.503 = val aff)
+    Wrote notes/B_DEV_AFF.md
+
+## B W2 REMAINING LEVERS (one at a time, parked path)
+
+    q32:        oracle=True peak 2.195 (BFS not peak)
+    vcount:     oracle=True peak 2.195 -> 2.023 (sort-phase)
+    e9c_inplace:oracle=True peak 2.023 (e9c not peak)
+    W3=1:       oracle=True peak 2.023 (e9c not peak)
+    Wrote notes/B_W2_REST.md
+
+## B DEAD AGG cu/cv/csm/cct
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_dead_agg.py
+    parents identical a52a70236a43f9e99a9546482041ac82
+    val agg peak 1.124 -> 0.956 GiB
+    Wrote notes/B_DEAD_AGG.md
+
+## B FIT TABLE
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_fit.py
+    EDGES_PER_VOX=0.043, thinned edges, parked aff, dead-agg
+    val nedge=7505458 parked=True
+    2.16 pred: WS 34.34 / RAG 21.16 / AGG 19.55; worst WS; OVER 23
+    Wrote notes/B_FIT.md data/cache/b_fit.json
+
+## B 8 OFFICIAL MIRROR TRIPLES
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_8flip.py
+    all 8: nfrag=2175400 bg=506568; 8 distinct size fingerprints
+    12x identity=26104800; official fused=26023852
+    Wrote notes/B_8FLIP.md
+
+## B SUBGRAPHHAC GOOD-MERGE (CPU)
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_subgraphhac.py
+    T=0.3 eps=0.10; 14 rounds; 1.87M merges; nseg=309454
+    VOI 0.1550/7.5519 FAIL (giant). close_class=True. no CUDA.
+    Wrote notes/B_SGHAC.md
+
+## B SORT-PEAK TMP (in/out vs DoubleBuffer query)
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_sort_peak.py
+    idle 5090; WATERZ_WS_MEMLOG=1; dry DoubleBuffer query only
+
+    nC=61035574 nfrag=2175400 oracle=True
+    tmp_inout=0.461 GiB tmp_dbl=0.007 GiB extra_n=0.455
+    peak 2.023 still flag+vcount+3 nC (sort+tmp cur=1.598)
+    fused-dbl-only pred 28.88 OVER. Wrote notes/B_SORT_PEAK.md
+
+## B DOUBLEBUFFER + GATHER + PARK
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_dbl_buf.py
+    DoubleBuffer keys+idx; host permute parked corners/vc
+    vcount delayed; flag freed before keys; qsz from qoff
+
+    nfrag=2175400 oracle=True leaked=0
+    tracked 2.023 -> 0.916 GiB; tmp_dbl=0.007
+    2.16 fused pred 21.05 FITS 23 usable
+    Wrote notes/B_DBL_BUF.md data/cache/b_dbl_buf.json
+    SOURCES S41 pinned
+
+## B FIT TABLE (after DoubleBuffer + park)
+
+command: ssh greengoblin .venv/bin/python -u scripts/b_fit.py
+    val ws=0.916 rag=1.250 agg=0.788 parked=True nedge=7505458
+    2.16 pred: WS 21.05 / RAG 21.16 / AGG 19.55; worst RAG; FITS 23
+    Wrote notes/B_FIT.md data/cache/b_fit.json
+
+## N7 POST-FIT REMESURE
+
+command: ssh v@100.90.97.111 WATERZ_AGG_LEVERS=15 WATERZ_STAGE_MS=1 .venv/bin/python -u scripts/n7_postfit.py
+    idle 5090; parked aff + DoubleBuffer + G15
+    median e2e 1669.48 ms (was 958.70)
+    ws 1272.39 rag 41.50 agg 351.72 extract 1.68 leftover 2.19
+    0.108 Gvox/s on 180 Mvox. Wrote notes/N7_POSTFIT.md
+
+## N7 COMPACT IOU
+
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n7_compact_iou.py
+    G15 p0aa compact 227.43 = scan 42.99 + hash 119.74 + radix 7.67 + other 57.03
+    owner=hash scan_frac=0.189 scan_dominates=false
+    1150 is an E2 IOU. No CSR splice. Wrote notes/N7_STOP.md SOURCES S42
+
+## N8 UNPARK / W5 / HASH / 2.16 FACT
+
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_unpark.py
+    WS identity nfrag=2175400 oracle=True
+    median e2e 1154 ms ws 913 rag 41 agg 197 (ε=0.40 speed path)
+    tracked ws 1.364 GiB; fused 2.16 pred 26.43 OVER; slab pred FITS
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_w5.py
+    algo 0/2/3 identity True; W5 1.63× (967→594 ms); default left 0
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_hash.py
+    parent=True; warp+SM 158 vs G15 120; full RBK 499; G15 CAS stays
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_run216.py
+    official make_big [3,375,2400,2400]; idle 5090; T=0.3 ε=0.40
+    e2e **13518 ms** / 0.160 Gvox/s; ws 10832 rag 433 agg 2224
+    nfrag 26104800 = 12×val. ≫2 s. Stop CUDA. notes/N8_IMPOSSIBLE.md
+
+## N9 TYPE D / CUDA KILL / BINS
+
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n9_measure.py
+    idle 5090; WATERZ_UF_ALGO=3; z-slab face-clear; ε=0.40
+    val identity=True nfrag=2175400 ws=557.24 w5=175.96 bfs=1.18
+    BFS/WS=0.00212 (PRUF dead)
+    basin max/nvox=0.010352 plateau max/nvox=0.007826 (no ConnectIt)
+    dirty_mult=1.0718 calls=315 (hash-table PDFs dead)
+    2.16 e2e=9212.7 ms / 0.234 Gvox/s (not TASK-grade)
+    ws=6536.2 rag=424.4 agg=2222.3; W5 kernels 2116.74 ms
+    nfrag=26104800 nlab=3860788
+    WS >4 s after W5: STOP CUDA tracks A/B/C
+    notes/N9_MEASURE.md N9_E4.md N9_HALVING.md N9_PLAYNE.md
+    Default WATERZ_UF_ALGO stays 0
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n9_binqueue.py
+    stock MEAN + BinQueue; T=0.3; fresh fragments per N
+    N=256/1024/4096: split=0.455129 merge=0.241600 nseg=322314 PASS
+    2175401 nodes 7505458 edges merged 1853086 each
+    no GPU bucket (no 5× visit proof; N7 visits≠wall)
+    notes/N9_BINS.md
+
+## N10 WS SPLIT — HOST PARK WAS THE 4s
+
+command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n10_ws_split.py
+    idle 5090; W5; val identity True both
+    park=1 ws=597.67 park=110 vcount=114 sort=2.91 unpark=44
+    park=0 ws=344.25 park=0 vcount=15 sort=2.90 unpark=3
+    1.74×. Sort is 3 ms; park path is the 268 ms.
+command: WATERZ_UF_ALGO=3 WATERZ_HOST_PARK=0 WATERZ_AFF_PARK=0 \
+    WATERZ_STAGE_MS=1 .venv/bin/python -u scripts/n8_run216.py
+    2.16 e2e **4918 ms / 0.439 Gvox/s** (was 9213 / 0.234)
+    ws 2577 (was 6536) rag 83 (was 424) agg 2238
+    RAG 424 was aff H2D. N9 CUDA-stop was PCIe, not UF.
+    notes/N10_BOTTLENECK.md
+    not 2 Gvox/s, not 3090 Ti
+
+## N11 PROBE FIRST / E4 / BINS KILL
+
+command: .venv/bin/python -u scripts/n11_nrep.py
+    idle 5090; count-only after tile-local Recip=e9b
+    val identity=True nfrag=2175400
+    n_face=68962500 n_list=104706433 n_rep=3267642 n_cross=8352645
+    n_rep/n_face=0.0474 n_rep/nvox=0.0182 e4_gate=True
+    720M slab same ratios n_rep=13070568
+    notes/N11_NREP.md
+command: .venv/bin/python -u scripts/n11_merge_probe.py
+    val RAG nedge=7505458 target_merges=1853086
+    find+union wall=2093.005 ms n_pop=4791399 ns/pop=436.8
+    kill vs ParHAC val agg 202 ms. no neighbor probe. no GPU BinQueue
+    notes/N11_PROBE.md
+command: WATERZ_UF_ALGO=3 WATERZ_HOST_PARK=0 WATERZ_AFF_PARK=0 \
+    WATERZ_WS_MEMLOG=1 WATERZ_STAGE_MS=1 .venv/bin/python -u scripts/n8_run216.py
+    2.16 e2e=4913.5 ms / 0.440 Gvox/s ws=2582 rag=83 agg=2229
+    WSMEM peak=11.518 GiB < 23 usable
+    park defaults flipped off (HOST_PARK/AFF_PARK)
+    notes/N11_MEM.md
+command: .venv/bin/python -u scripts/n11_e4.py
+    WATERZ_UF_ALGO=4 contracted p1 pairs
+    val identity vs wz_fragments.npy True vs algo0 True nfrag=2175400
+    W5 stitch=168.45 ms E4 stitch=136.39 ms ratio=0.810 > 0.5
+    keep=False. no 2.16. speed path stays UF_ALGO=3
+    notes/N11_E4.md
+    not 2 Gvox/s, not 3090 Ti
+
+## N12
+command: clone papers/repos/{graph-mining,ParHAC,dynamic-hac,PRUF-watershed,cuvs,RAMA}; grep .cu
+    ParHAC/TeraHAC/DynHAC/SubgraphHAC: 0 .cu. PRUF yes. cuVS single-link MST. RAMA thrust contract.
+    no Funke/Wolf email. Dhulipala draft unsent (still no GPU compact)
+    notes/N12_REPOS.md
+command: nsys profile val then 2.16 parks-off UF=3
+    ident array_equal True nfrag=2175400 bg=506568
+    val e2e=451.3 ms ws=224 rag=14 agg=211
+    2.16 e2e=4943.3 ms ws=2591 rag=84 agg=2248
+    NVTX 2.16: w5_stitch 52.8% e9c 32.1% hash_rewrite 8.1% compact_radix 1.4% hash_insert ~0%
+    kernels: k_w5_compress_list 21.1% k_uf_compress_c 18.0% k_hash_insert 3.4%
+    notes/N12_NSYS.md
+command: default WATERZ_UF_ALGO 0 -> 3 (keep 0 behind env) after ident True
+command: .venv/bin/python -u scripts/n11_e4.py  (face emit + Unique pairs)
+    i<j broke e9c Recip=false nfrag=3281827; both dirs then Unique restored identity
+    val identity True stitch=142.91/168.33=0.849 >0.5 keep_default=False
+    2.16 algo=4 e2e=4580.6 ms ws=2240 (0.865x W5). kernel stays UF_ALGO=4
+    notes/N12_E4.md
+command: .venv/bin/python -u scripts/n12_tile.py
+    8x16x32 / 16x16x32 / 8x32x32 all identity True
+    2.16 WS 2576 / 2470 / 2486 vs 2582 (0.998 / 0.957 / 0.963) none <=0.85x
+    default stays 8x16x32. binaries kept
+    notes/N12_TILE.md
+command: .venv/bin/python -u scripts/n12_compact.py
+    k=0,2,4,8 T=0.3 + four-T eps=0.08
+    k=4 T=0.3 merge 0.2653 FAIL. others PASS four-T
+    vs nsys val agg 211 ms no 1.2x. do not default WATERZ_COMPACT_EVERY
+    notes/N12_COMPACT.md
+command: .venv/bin/python -u scripts/n12_off.py
+    eps 0.5/0.8/1.0/2.0 T=0.3 merge FAIL (0.27/0.31/0.38/0.87)
+    kruskal frozen 6092 ms split 2.94 FAIL. mutex hop split 2.13 FAIL
+    PRUF3D sm_120 GPU 101.9 ms (not waterz fragments). RAMA cmake no tree on goblin
+    never default FAIL
+    notes/N12_OFF.md
+command: fatbin sm_86+sm_120; unset WATERZ_UF_ALGO (default 3); n8_run216
+    2.16 e2e=4923.9 ms / 0.439 Gvox/s ws=2581 rag=94 agg=2230
+    vs N11 4913.5 +0.21% inside ±2%
+    scripts/n12_3090.py ready, do not run until 3090 Ti rent
+    notes/N12_FATBIN.md
+    not 2 Gvox/s, not 3090 Ti
+
+## N13 leftover gates (5090 only, email unsent)
+    idle RTX 5090. parks off. no 3090. no multi-GPU. no product-default changes.
+    P0: ident True nfrag=2175400 bg=506568. T=0.3 split=0.4408 merge=0.2543 PASS.
+        2.16 e2e=4915.3 ms (ws=2579 rag=83 agg=2234) vs N12 4923.9 within 2%. stack_ok.
+        notes/N13_BASELINE.md
+    L1: nsys /tmp/n12_216.nsys-rep K=4579.7 ms M=cudaMemcpy 4957.4 ms (76.6% API)
+        E=4915.3 E-K=335.6 <500. M>=0.9K. gate_artifact=True gate_real=False. no L1b.
+        notes/N13_D2H.md
+    L2: idle E6t T=0.3 device_ms=2860.8 vs E6s 200.6. VOI PASS 0.4417/0.2453.
+        byte_identical=False ndiff=218644. TASK line 118 cannot ship. no four-T, no 2.16.
+        keep_default=False. no second StarMerge.
+        notes/N13_E6T.md
+    L3: UF=4 ident True. 2.16 e2e=4592.4 ws=2240. NVTX stitch=1791.5 unique=97.7
+        flatten kernels=1372.1 frac=0.766 >=0.70 L3-stop. unique frac=0.055. no third stitch.
+        keep_default=False.
+        notes/N13_E4.md
+    L4: HASH_INSERT_ONLY T=0.3 ms=654 split=0.3266 merge=3.489 FAIL (overflow).
+        cut vs 211 ms =0.32. keep_default=False.
+        notes/N13_INSERT.md
+    L5: RAMA cmake+build OK (nvcc 12.8). GPU solver timeout 600s on val RAG. no labels.
+        task_legal=False keep_default=False. no cuSLINK.
+        notes/N13_RAMA.md
+    defaults unchanged: UF=3, parks off, ε=0.40 T=0.3 / 0.08 four-T, compact k=0.
+    not 2 Gvox/s, not 3090 Ti
+
+## N14 leftover closers vs gap ledger (5090 only, email unsent)
+    idle RTX 5090. parks off. no product-default changes unless keep_default.
+    not 2 Gvox/s, not 3090 Ti. PLAN.md is stale; this log + notes/N*.md are the trail.
+
+    Where we are (N13 P0): 2.16 e2e=4915.3 ms / 0.44 Gvox/s. WS=2579 RAG=83 agg=2234.
+    Target 1080 ms on a slower 3090 Ti (1008 vs 1792 GB/s). Need ~4.5× on a faster card.
+
+    Voided stops (do not re-cite as theorems):
+    N8 13518 ms / N9 WS 6536 ms were host-park PCIe. Parks-off → 4918 ms (N10).
+    N9 Playne/path-halving “killed” on that 6536. Stitch now owns 52.8% NVTX; never reopened.
+    N11 “GPU BinQueue dead” was one device thread find+union 2093 ms, neighbor rewrite skipped.
+    Abboud/ParHAC P-completeness does not close TASK: MEAN BinQueue N=256 VOI PASS (0.4551/0.2416).
+    PRUF 800 Mvox / 2.5 s is grayscale Meyer, not waterz S1.
+
+    This-stack facts that survive:
+    Time ∝ voxels on official 3×2×2 (nfrag=12×val). Mutex/Kruskal/ε≥0.5/X1/SubgraphHAC VOI FAIL.
+    E6t VOI PASS, byte_identical=False, 14× slower. E4 identity True, flatten 76.6% of stitch.
+    Zeroing E6s dirty-scan 1598 ms leaves e2e ≈ 3326 ms. Optimistic T1+T3 composition ≈ 1.9 s
+    on 5090 (still short of 2.0, wrong card).
+
+    Stale claims (logged, not re-litigated):
+    N10 “E4 untried” / N11 “2.16 skipped” superseded by N12/N13 ~4590 ms.
+    WATERZ_AGG_LEVERS comment “none run on device” stale; scripts set 15; lib default 0.
+    w5_union_find cudaMalloc CUB tmp + stitch list inside timed event.
+    N12 val nsys dump empty (stale sqlite). Fused 2.16 pred 26.4 GiB OVER 24; 5090 has 32 GB,
+    never timed; cannot ship for 3090 24 GB (z-slab WSMEM 11.5 GiB is the fit path).
+    No unpublished ParHAC GPU compact (NeurIPS 2022 is CPAM/CPU).
+
+    Tracks: T1 fold flatten; T2 list path-halving; T3 GPU FIFO-BinQueue; T4 fused OOM check;
+    T5 3090 Ti only after a stacked closer. notes/N14_*.md.
+    T1: WATERZ_FOLD_FLATTEN=1 ident False (nfrag/bg match, array_equal False).
+        2.16 WS=1762.5 (cut 1.46 vs 2579) but nlab=5924028 HASH_OVERFLOW. keep_default=False.
+        One-hop is not enough for all e9b consumers. Default flatten stays.
+    T2: WATERZ_LIST_HALVING=1 ident True nfrag=2175400 bg=506568.
+        2.16 WS=2569.7 vs 2579 cut=1.004 < 1.2. keep_default=False.
+    T3: GPU FIFO-BinQueue N=256 MEAN compiled. k_binq_merge hung >180s on val RAG.
+        Killed. No VOI. keep_default=False. no 2.16. Not N11 1-thread probe; still too serial.
+    T4: WATERZ_Z_SLAB=0 fused 2.16. stitch 890 ms on 2.16 Gvox then sort tmp 5.49 GiB, rc=-11 OOM.
+        keep_default=False. cannot ship 3090 24 GB.
+    T5: stacked_closer=False keep=[F,F,F]. n12_3090.py not run. card is 5090.
+    defaults unchanged: UF=3, parks off, ε=0.40 T=0.3 / 0.08 four-T, compact k=0.
+    not 2 Gvox/s, not 3090 Ti
+
+## N15 execute leftover legal experiments (5090 only)
+    idle RTX 5090. parks off. no product-default unless keep_default.
+    not 2 Gvox/s, not 3090 Ti. 2.16 only after identity True AND 2-run array_equal.
+
+    T1-PERM: WATERZ_FOLD_FLATTEN=1 vs wz_fragments.npy. No 2.16.
+        identity_byte=False array_equal=False run2_array_equal=False.
+        nfrag=2175400 bg=506568 match; bg_mask_eq=True.
+        same_partition=False canon_eq=False fp_eq=False.
+        ndiff_raw=ndiff_canon=161028442 / 180000000 (89.5%).
+        pairs n=3018980 gold_split=826033 pred_merge=63
+        max_gold_fanout=6 max_pred_fanout=822582.
+        verdict=wrong_basins. revive_t1=False. kill_t1_as_speed=True.
+        nfrag/bg match is not a partition. Non-determinism is the D2 find-vs-seg race.
+        keep_default=False. notes/N15_T1PERM.md data/cache/n15_t1perm.json
+
+    T2 share-off+fold: FOLD_FLATTEN=1 SHARE_OFF=1.
+        ident True run2 True ndiff=0 nfrag=2175400 bg=506568. val peak 1.93 vs 1.47 GiB.
+        2.16 WS=1785.3 cut=1.445 nlab=3860788 e2e=4117.3. keep_default=True (speed+ident).
+        C++ default stays off (+4 B/vox; 3090 24GB unmeasured). notes/N15_T2.md
+    T3 jump flatten: JUMP_FLATTEN=1 (not UF_ALGO=1, not skip). ident True.
+        jump_rounds=2/64. 2.16 WS=2581.6 cut=0.999. keep_default=False. notes/N15_T3.md
+    T4 e9b-only fold: FOLD_FLATTEN=1 E9B_FOLD_ONLY=1 share on. ident True.
+        2.16 WS=2244.0 cut=1.149 < 1.2. keep_default=False. notes/N15_T4.md
+    T5 hook-to-root: HOOK_ROOT=1. ident True. stitch_rounds 5→4. peak 1.47 GiB.
+        2.16 WS=2105.4 cut=1.225. keep_default=True. C++ default stays off. notes/N15_T5.md
+    T2+T5 stack: ident True. 2.16 WS=1311.4 cut=1.967 e2e=3639.8 nlab=3860788.
+        keep_default=True on WS 1.2x. notes/N15_T2T5.md
+    T6 fuse dirty: FUSE_DIRTY=1. T=0.3 VOI identical to N13 (0.4408/0.2543) run2 True.
+        four-T ε=0.08 PASS. 2.16 agg=2078.4 cut=1.075 nlab=3860788.
+        keep_default=False. legal lever. notes/N15_T6.md
+    T7 four-pass dirty megakernel: subsumed by T6. keep_default=False. notes/N15_T7.md
+    T8 sticky sz0: T=0.3 VOI PASS (0.4437/0.2528 drifted) run2 True. agg=1817.1 cut=1.229.
+        four-T FAIL T=0.2 merge 0.3585>0.3525. 2.16 nlab=3860907.
+        keep_default=False (retracted). notes/N15_T8.md
+    T9 E6s MAX_OUTER=32: T=0.3 VOI PASS merge 0.26095 (wall 0.2611). agg=2115.7 cut=1.056.
+        2.16 nlab=3860720. keep_default=False. notes/N15_T9.md
+    T10 CUDA graph G2: not implemented. E−K=336 ms; 2234−336=1898>1862. keep_default=False.
+        notes/N15_T10.md
+    T11 stitch arena: not implemented. T2+T5 already 1.96x WS. keep_default=False.
+        notes/N15_T11.md
+    T12 persistent stitch: not implemented. 4-byte D2H ×4 after T5. keep_default=False.
+        notes/N15_T12.md
+    T13 drop vcount: not run. ~178 ms vs stacked WS 1313. keep_default=False. notes/N15_T13.md
+    T14 SortPairs: not run. 20–40 ms. keep_default=False. notes/N15_T14.md
+    T15 fuse pack_amask: not run. T8 four-T FAIL. keep_default=False. notes/N15_T15.md
+
+    Legal stack T2+T5+T6 (T8 excluded): ident True, T=0.3 VOI identical to N13, run2 True.
+        2.16 WS=1313.1 agg=2081.2 e2e=3499.3 / 0.617 Gvox/s (5090). nlab=3860788.
+        e2e cut vs 4915.3 = 1.405. keep_default=False (agg misses 1.2x).
+        C++ product defaults unchanged: UF=3, parks off, ε=0.40/0.08, compact k=0,
+        fold/share_off/hook_root/fuse_dirty env still default 0.
+        notes/N15_STACK.md data/cache/n15_stack.json
+    not 2 Gvox/s, not 3090 Ti
+
+## N16 GPU leftover tracks + deep verify (5090 only)
+    idle RTX 5090. parks off. no product-default unless keep_default.
+    not 2 Gvox/s, not 3090 Ti. 2.16 only after identity/VOI gates. four-T is
+    official run_baseline.py on mine_thr*.h5 (regraded independently).
+
+    T7 nlive arith: FUSE_DIRTY=1 NLIVE_ARITH=1. T=0.3 VOI identical to N13
+        (0.44082269408145347 / 0.25427477829766865) run2 True nseg=321855.
+        four-T ε=0.08 ACCURACY GATE PASS (regrade n16_t7_four):
+        0.2 0.3707/0.3350; 0.3 0.4512/0.2505; 0.4 0.5162/0.2268; 0.5 0.6129/0.2184.
+        2.16 agg=1930.12 cut=1.157 vs 2234.05 gate 1861.71. nlab=3860788.
+        keep_default=False. legal lever. notes/N16_T7.md data/cache/n16_t7.json
+
+    T10 CUDA graph G2: not instantiated. hash_combine_dirty D2H every inner.
+        T12 mapped-flag 2.16 WS=1028996. T7 already dropped k_count_live;
+        remaining agg gap 67 ms on deep. keep_default=False. notes/N16_T10.md
+
+    T11 stitch arena: STITCH_ARENA=1 + T2T5. ident True ndiff=0 fp lock.
+        val peak 2.19 GiB leaked 419295239. 2.16 WS=1313.24 vs T2T5 1311.41
+        cut=0.999 nlab=3860788. keep_default=False. notes/N16_T11.md
+
+    T12 pin changed: PIN_CHANGED=1 + T2T5. ident True. 2.16 stitch
+        e9b ~137s ×3 + e9c ~206s ×3. WS=1028996.16 nlab=3860788.
+        mapped atomicExch on changed. keep_default=False. notes/N16_T12.md
+
+    T13 drop k_count_v2: not removed. T14/deep 2.16 vcount=177.8 ms.
+        BFS qsz is voxel occupancy; drop is identity-illegal.
+        keep_default=False. notes/N16_T13.md
+
+    T14 sort-pack: SORT_PACK=1 + T2T5. ident True ndiff=0.
+        2.16 sort 52.71 vs T2T5 33.85. WS=1343.79 cut vs T2T5=0.976.
+        nlab=3860788. keep_default=False. notes/N16_T14.md
+
+    T15 fuse pack: FUSE_PACK=1. T=0.3 VOI identical to N13 run2 True.
+        four-T regrade n16_t15_four ACCURACY GATE PASS (same table as T7).
+        2.16 agg=2215.94 cut=1.008 nlab=3860788. keep_default=False.
+        notes/N16_T15.md
+
+    DEEP T2+T5+T6+T7: ident True. T=0.3 VOI identical N13. four-T regrade
+        n16_deep_four ACCURACY GATE PASS (same table).
+        2.16 two-run sha256 equal
+        c53d430e5ba7f2dbbb8b011d93b8de6a3e98f34276ab5f8e5afcd0c23eced937
+        nlab=3860788 both. a: e2e=3345.18 WS=1312.02 agg=1929.00
+        b: e2e=3323.68 WS=1310.32 agg=1911.37
+        ws_peak=14193138368 (13.22 GiB). 3090 24GB not measured.
+        keep_default=False (agg misses 1.2× by 67 ms).
+        C++ defaults unchanged: UF=3, parks off, ε=0.40/0.08, compact k=0,
+        fold/share_off/hook_root/fuse_dirty/nlive_arith/arena/pin/sort_pack/fuse_pack
+        getenv still default 0.
+        notes/N16_DEEP.md notes/N16_STACK.md data/cache/n16_deep.json
+        data/cache/n16_four_regrade.json
+    not 2 Gvox/s, not 3090 Ti
+
+
+## N18_A1
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=0 keep=False hang=False
+ws=1311.435337178409 agg=1933.3693240769207 e2e=3350.21533203125
+four=True
+
+## N18_A1
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=0 keep=True hang=False
+ws=1314.7199610248208 agg=1683.1723069772124 e2e=3104.0859375
+four=True
+
+## N18_A2
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=1 keep=False hang=False
+ws=0 agg=0 e2e=0
+four=None
+
+## N18_A3
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=0 keep=False hang=False
+ws=0 agg=0 e2e=0
+four=True
+
+## N18_A4
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=0 keep=False hang=False
+ws=0 agg=0 e2e=0
+four=True
+
+## N18_A5
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=1 keep=False hang=False
+ws=0 agg=0 e2e=0
+four=None
+
+## N18_A_STOP
+best_legal_ws=9000000000.0 freeze WS track
+
+## N18 VOI-first sprint (5090)
+
+claim: not a 2 Gvox/s number; not 3090 Ti. Parks off. VRAM cleared of VLLM for runs.
+
+### A0
+- n18_voi_gate (voi_only default), n18_dead.jsonl seeded, n18_nsys on N17 stack
+- nsys 2.16 e2e~3350 (see notes/N18_A0_NSYS.md); micro-opt kill <200ms rule
+
+### A1 unlock PASS
+- voi_only harness; identity diagnostic True (not ship-gate)
+- four-T PASS; 2.16 ws=1314.7 agg=1683.2 e2e=3104.1 keep_default=True (env)
+
+### A2–A5 (WS ladder) — STOP, no WS≤900
+- A2 VCOUNT_COMPACT: voi ok; four empty/fail; kill
+- A3 TIE_FLIP: four PASS; 2.16 ws_label_d rc=-3; kill
+- A4 COARSE_DELTA=8: four PASS; 2.16 rc=-3; no WS cut; kill
+- A5 BLOCK_VOI: four fail/empty; kill
+- notes/N18_A_STOP.md: freeze WS; EV → Track B
+
+### B0–B3
+- B0: n18_nsys.json / N18_A0_NSYS.md
+- B1 parallel BinQueue: 2253ms wall, VOI FAIL, kill (not serial reopen)
+- B2 eps 0.41–0.49: all T=0.3 merge FAIL; best_eps=None
+- B3 COMPACT_EVERY=8: four PASS; agg=1765 (worse vs N17 1690); cut -75ms; ParHAC local max; kill
+
+### C
+- n18_3090_grade.py REFUSE on 5090; no C++ default flip
+
+### Honest ceiling (5090)
+- best e2e ~3104 ms / ~0.70 Gvox/s (A1 = N17 stack)
+- need ~2.9× on 5090 (~5× bw-scaled to 3090 Ti) still open
+
+## N19_I0_REPRO
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=0 keep=True ws=1309.3050210736692 agg=1679.9063761718571 e2e=3093.4345703125
+
+## N19_W1
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=4 keep=None ws=0 agg=0 e2e=0
+
+## N19_W3
+claim: not a 2 Gvox/s number; not 3090 Ti
+rc=4 keep=None ws=0 agg=0 e2e=0
+
+## N19 literature EV sprint (5090)
+
+claim: not a 2 Gvox/s number; not 3090 Ti. Parks off.
+
+### I0 PASS
+- nsys force-export → n19_owners.json (40 kern); top: compress_list 508, hash_rewrite 287, rebuild 278
+- I0_REPRO e2e=3093.4 (A1 3104 ±2%); four-T PASS; keep_default=True
+
+### W_STOP
+- W0 owners documented; W1/W3 owner-skip (<200ms); W2 Allegretti skip; no WS≤900
+
+### H_STOP
+- H0 agg owners; H1 ladder VOI/wall kill; H2 NNG VOI FAIL; H3 unimplemented; H4 mismatch
+- agg floor still ~1680 ms; no path ≤1000 ms
+
+### X dead
+- X1/X2/X3 stamped; no 2.16 on FAIL
+
+### C
+- REFUSE not 3090 Ti; no C++ default flip
+
+honest: ~0.70 Gvox/s ceiling unchanged; never claim 2 Gvox/s from 5090
+
+## N19 community report artifacts
+
+claim: not a 2 Gvox/s number; not 3090 Ti
+
+- notes/ATLAS.md — Part I chronology + Part II findings (pinned)
+- data/cache/voi_atlas.csv + voi_atlas.json — 97 rows; rebuild: scripts/build_voi_atlas.py
+- scripts/legal_eval.sh — N17 env + dual-ε four-T / voi_only
+- notes/PROBLEM.md — remaining precise problem + ruled-out attacks
+- README.md aligned to N17 dual-ε; explicit not-3090 / not-2Gvox

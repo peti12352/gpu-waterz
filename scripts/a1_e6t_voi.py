@@ -65,7 +65,14 @@ def bind(lib):
     ]
 
 
-def run(lib, u, v, sm, ct, thrs, max_id):
+def _agg_eps(default=0.08):
+    """Same override as src/segment.py. a1 used to hardcode 0.08, so
+    e3's v1_voi env (WATERZ_AGG_EPS=0.16) never reached the kernel."""
+    s = os.environ.get("WATERZ_AGG_EPS")
+    return float(s) if s else default
+
+
+def run(lib, u, v, sm, ct, thrs, max_id, eps):
     parents = np.empty((len(thrs), max_id + 1), dtype=np.uint32)
     stats = np.zeros((len(thrs), 3), dtype=np.int64)
     device_ms = ctypes.c_double(0.0)
@@ -78,7 +85,7 @@ def run(lib, u, v, sm, ct, thrs, max_id):
         ctypes.c_int64(len(u)),
         thrs.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
         ctypes.c_int(len(thrs)),
-        ctypes.c_double(0.08),
+        ctypes.c_double(eps),
         parents.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
         ctypes.c_uint32(max_id),
         stats.ctypes.data_as(ctypes.POINTER(ctypes.c_int64)),
@@ -139,10 +146,12 @@ def main():
     u, v, sm, ct, fr, max_id = load_rag()
     lib = ctypes.CDLL(str(DSO))
     bind(lib)
+    eps = _agg_eps()
+    print(f"A1 eps={eps} (WATERZ_AGG_EPS or locked 0.08)", flush=True)
 
     thrs = np.asarray(AFF_THRESHOLDS, dtype=np.float64)
     (rc, parents, stats, device_ms, wall_ms), errtxt = capture_stderr(
-        lambda: run(lib, u, v, sm, ct, thrs, max_id))
+        lambda: run(lib, u, v, sm, ct, thrs, max_id, eps))
     sys.stderr.write(errtxt)
     inner = [int(x) for x in stats[:, 2]]
     merges = [int(x) for x in stats[:, 1]]
@@ -172,6 +181,7 @@ def main():
         "outer": outer,
         "inner": inner,
         "merges": merges,
+        "eps": eps,
         "thresholds": list(AFF_THRESHOLDS),
         "path_ran": ran,
         "wanted_path": tag,

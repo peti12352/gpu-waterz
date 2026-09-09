@@ -1,0 +1,143 @@
+{
+  "claim": "not a 2 Gvox/s number; not 3090 Ti",
+  "mode": "voi_only",
+  "name": "N19_I0_REPRO",
+  "ident_diag": {
+    "identity": true,
+    "array_equal": true,
+    "run2_array_equal": true,
+    "nfrag": 2175400,
+    "bg": 506568,
+    "ndiff_raw": 0,
+    "same_partition": true,
+    "fp_eq": true,
+    "fp_pred": "fff9037cab341692be0c9bf3c577d4ff",
+    "fp_gold": "fff9037cab341692be0c9bf3c577d4ff",
+    "n_nonzero_sizes_pred": 2175400,
+    "n_nonzero_sizes_gold": 2175400,
+    "peak_bytes": 1928284592,
+    "meta1": {
+      "nfrag_ret": 2175400,
+      "nfrag_out": 2175400,
+      "peak_bytes": 1928284592,
+      "leaked_bytes": 0,
+      "park": true,
+      "aff_bytes": 540000000,
+      "divide_ms": 1.1857919692993164
+    },
+    "meta2": {
+      "nfrag_ret": 2175400,
+      "nfrag_out": 2175400,
+      "peak_bytes": 1928284592,
+      "leaked_bytes": 0,
+      "park": true,
+      "aff_bytes": 540000000,
+      "divide_ms": 1.183743953704834
+    },
+    "env": {
+      "WATERZ_FOLD_FLATTEN": "1",
+      "WATERZ_SHARE_OFF": "1",
+      "WATERZ_JUMP_FLATTEN": null,
+      "WATERZ_E9B_FOLD_ONLY": null,
+      "WATERZ_HOOK_ROOT": "1",
+      "WATERZ_UF_ALGO": "3"
+    }
+  },
+  "ident_blocking": false,
+  "voi": {
+    "ok": true,
+    "run2_array_equal": true,
+    "m1": {
+      "rc": 1,
+      "split": 0.44082269408145347,
+      "merge": 0.25427477829766865,
+      "nseg": 321855,
+      "ok": true,
+      "limit_split": 0.4738,
+      "limit_merge": 0.2611,
+      "inner": 538,
+      "merges": 1853545
+    },
+    "m2": {
+      "rc": 1,
+      "split": 0.44082269408145347,
+      "merge": 0.25427477829766865,
+      "nseg": 321855,
+      "ok": true,
+      "limit_split": 0.4738,
+      "limit_merge": 0.2611,
+      "inner": 538,
+      "merges": 1853545
+    },
+    "env": {
+      "WATERZ_FUSE_DIRTY": "1",
+      "WATERZ_STICKY_SZ0": null,
+      "WATERZ_MAX_OUTER": null,
+      "WATERZ_AGG_LEVERS": "15",
+      "WATERZ_AGG_EPS": null
+    }
+  },
+  "four": {
+    "four_pass": true,
+    "rc": 1,
+    "ms": 513.4243802167475,
+    "thresholds": [
+      0.2,
+      0.3,
+      0.4,
+      0.5
+    ],
+    "env": {
+      "WATERZ_FUSE_DIRTY": "1",
+      "WATERZ_STICKY_SZ0": null,
+      "WATERZ_MAX_OUTER": null
+    }
+  },
+  "run216": {
+    "claim": "not a 2 Gvox/s number; not 3090 Ti",
+    "gpu": "NVIDIA GeForce RTX 5090, 526 MiB, 31584 MiB, 0 %",
+    "shape": [
+      3,
+      375,
+      2400,
+      2400
+    ],
+    "nvox": 2160000000,
+    "e2e_ms": 3093.4345703125,
+    "stages": {
+      "ws": 1309.3050210736692,
+      "rag": 85.35701874643564,
+      "agg": 1679.9063761718571,
+      "extract": 18.279004842042923
+    },
+    "nlab": 3860788,
+    "gvox_s_5090": 0.6982530100133315,
+    "eps": 0.4,
+    "impossible_vs_2s": true,
+    "aff_parked": false
+  },
+  "agg_ms": 1679.9063761718571,
+  "ws_ms": 1309.3050210736692,
+  "e2e_ms": 3093.4345703125,
+  "cut_agg": 1.3298659948683988,
+  "cut_ws": 1.9697819397928242,
+  "agg_gate": 1861.7086368612945,
+  "ws_gate": 2149.204486825814,
+  "n18_ws": 1315.0,
+  "n18_agg": 1683.0,
+  "n18_e2e": 3104.0,
+  "ws_le_900": false,
+  "e2e_vs_n18": 1.0034154366117505,
+  "hang": false,
+  "keep_default": true,
+  "rc216": 0,
+  "env": {
+    "WATERZ_FOLD_FLATTEN": "1",
+    "WATERZ_SHARE_OFF": "1",
+    "WATERZ_HOOK_ROOT": "1",
+    "WATERZ_FUSE_DIRTY": "1",
+    "WATERZ_NLIVE_ARITH": "1",
+    "WATERZ_EMIT_HOLES": "1"
+  },
+  "gpu": "NVIDIA GeForce RTX 5090, 16 MiB, 32094 MiB, 0 %"
+}

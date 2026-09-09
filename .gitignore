@@ -1,4 +1,13 @@
-data/
+# Large / local-only (dataset on TASK Drive link; not in this repo)
+data/*
+!data/cache/
+data/cache/*
+!data/cache/voi_atlas.csv
+!data/cache/voi_atlas.json
+!data/cache/n19_dead.jsonl
+!data/cache/n19_owners.json
+!data/cache/N19_I0_REPRO.json
+
 *.h5
 .venv/
 __pycache__/
@@ -8,5 +17,8 @@ __pycache__/
 .ipynb_checkpoints/
 papers/*.pdf
 papers/repos/
+papers/oa/
 tmp_sync/
 .cuda-nvrtc*
+*.nsys-rep
+*.sqlite

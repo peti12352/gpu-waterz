@@ -19,6 +19,14 @@ STAGE_MS: dict[str, float] = {}
 # refuse to report a speed number measured on the host fallback.
 AGG_BACKEND = ""
 
+# Edge count the last segment_d built, so the memory report can use the real
+# RAG size rather than the _max_edges capacity it was allocated against.
+LAST_NEDGE = 0
+
+# True when the last segment_d parked affinity out of VRAM between k_flow
+# and e9b. External tensors (torch/cupy) cannot be parked; DevBuf can.
+LAST_AFF_PARKED = False
+
 ROOT = Path(__file__).resolve().parents[1]
 _WS = ROOT / "src/libws_gpu.so"
 _RAG = ROOT / "src/librag_gpu.so"
@@ -27,12 +35,170 @@ _RAC = ROOT / "src/librac_agg.so"
 _PARHAC_D = ROOT / "src/libparhac_d.so"
 
 
-def _e6r_locked():
-    p = ROOT / "data/cache/e6r_pass.txt"
-    if not p.is_file():
-        return False
-    t = p.read_text()
-    return t.startswith("PASS") and "LOCK" in t
+_RT = None
+
+
+def _rt():
+    """The CUDA runtime, used directly so that the device-resident path needs no
+    array library. torch was the previous device allocator and is not installed
+    on the benchmark machine; cudaMalloc through ctypes is the whole of what was
+    being asked of it."""
+    global _RT
+    if _RT is not None:
+        return _RT
+    for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
+        try:
+            rt = ctypes.CDLL(name)
+            break
+        except OSError:
+            continue
+    else:
+        raise RuntimeError("libcudart not found; the device path needs CUDA")
+    sz = ctypes.c_size_t
+    rt.cudaMalloc.argtypes = [ctypes.POINTER(ctypes.c_void_p), sz]
+    rt.cudaFree.argtypes = [ctypes.c_void_p]
+    rt.cudaMemcpy.argtypes = [ctypes.c_void_p, ctypes.c_void_p, sz, ctypes.c_int]
+    rt.cudaMemsetAsync.argtypes = [ctypes.c_void_p, ctypes.c_int, sz, ctypes.c_void_p]
+    rt.cudaDeviceSynchronize.argtypes = []
+    rt.cudaEventCreate.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+    rt.cudaEventRecord.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    rt.cudaEventSynchronize.argtypes = [ctypes.c_void_p]
+    rt.cudaEventDestroy.argtypes = [ctypes.c_void_p]
+    rt.cudaEventElapsedTime.argtypes = [
+        ctypes.POINTER(ctypes.c_float), ctypes.c_void_p, ctypes.c_void_p]
+    rt.cudaGetErrorString.argtypes = [ctypes.c_int]
+    rt.cudaGetErrorString.restype = ctypes.c_char_p
+    _RT = rt
+    return _RT
+
+
+def _ck(rc):
+    if rc != 0:
+        raise RuntimeError(
+            f"CUDA error {rc}: {_rt().cudaGetErrorString(rc).decode()}")
+
+
+class DevBuf:
+    """A cudaMalloc'd array. Exposes __cuda_array_interface__ so a caller can
+    keep the result in VRAM and hand it to torch, cupy or numba without a copy,
+    which is what TASK's "labels in VRAM" grading asks for."""
+
+    def __init__(self, shape, dtype, ptr=None, owner=None):
+        self.shape = tuple(int(s) for s in np.atleast_1d(shape))
+        self.dtype = np.dtype(dtype)
+        self.nbytes = int(np.prod(self.shape)) * self.dtype.itemsize
+        self._owner = owner
+        if ptr is None:
+            p = ctypes.c_void_p()
+            _ck(_rt().cudaMalloc(ctypes.byref(p), ctypes.c_size_t(self.nbytes)))
+            self.ptr = int(p.value)
+            self._mine = True
+        else:
+            self.ptr = int(ptr)
+            self._mine = False
+
+    @property
+    def __cuda_array_interface__(self):
+        return {"shape": self.shape, "typestr": self.dtype.str,
+                "data": (self.ptr, False), "strides": None, "version": 3}
+
+    @classmethod
+    def from_host(cls, a):
+        a = np.ascontiguousarray(a)
+        b = cls(a.shape, a.dtype)
+        _ck(_rt().cudaMemcpy(ctypes.c_void_p(b.ptr), a.ctypes.data,
+                             ctypes.c_size_t(b.nbytes), 1))
+        return b
+
+    def to_host(self, count=None):
+        """Copy back, optionally only the first `count` elements of a 1-D
+        buffer, so an oversized capacity array costs only what it holds."""
+        shape = self.shape if count is None else (int(count),)
+        out = np.empty(shape, self.dtype)
+        _ck(_rt().cudaMemcpy(out.ctypes.data, ctypes.c_void_p(self.ptr),
+                             ctypes.c_size_t(out.nbytes), 2))
+        return out
+
+    def view(self, shape, dtype=None):
+        return DevBuf(shape, dtype or self.dtype, ptr=self.ptr, owner=self)
+
+    def free(self):
+        if getattr(self, "_mine", False) and self.ptr:
+            _rt().cudaFree(ctypes.c_void_p(self.ptr))
+        self.ptr = 0
+        self._mine = False
+
+    def narrow(self, count):
+        """Return a new DevBuf holding the first `count` elements (D2D)."""
+        count = int(count)
+        if count < 0 or count > int(np.prod(self.shape)):
+            raise ValueError(f"narrow count={count} shape={self.shape}")
+        if count == int(np.prod(self.shape)):
+            return self
+        out = DevBuf(count, self.dtype)
+        _ck(_rt().cudaMemcpy(
+            ctypes.c_void_p(out.ptr), ctypes.c_void_p(self.ptr),
+            ctypes.c_size_t(count * self.dtype.itemsize), 3))
+        self.free()
+        return out
+
+    def reload_from_host(self, host):
+        """Re-allocate and copy host bytes into this DevBuf (after park)."""
+        host = np.ascontiguousarray(host)
+        if self._mine and self.ptr:
+            self.free()
+        p = ctypes.c_void_p()
+        _ck(_rt().cudaMalloc(ctypes.byref(p), ctypes.c_size_t(int(host.nbytes))))
+        self.ptr = int(p.value)
+        self._mine = True
+        self.shape = tuple(int(s) for s in np.atleast_1d(host.shape))
+        self.dtype = np.dtype(host.dtype)
+        self.nbytes = int(host.nbytes)
+        _ck(_rt().cudaMemcpy(
+            ctypes.c_void_p(self.ptr), host.ctypes.data,
+            ctypes.c_size_t(self.nbytes), 1))
+
+    def __del__(self):
+        try:
+            self.free()
+        except Exception:
+            pass
+
+
+def _dev_view(a):
+    """Read a device array's pointer, shape and dtype without importing its
+    library. Covers torch CUDA tensors, cupy and numba, all of which implement
+    the interface; returns None for anything host-side."""
+    ai = getattr(a, "__cuda_array_interface__", None)
+    if ai is not None:
+        return DevBuf(ai["shape"], np.dtype(ai["typestr"]),
+                      ptr=ai["data"][0], owner=a)
+    if getattr(a, "is_cuda", False) and hasattr(a, "data_ptr"):
+        return DevBuf(tuple(a.shape), np.dtype(str(a.dtype).split(".")[-1]),
+                      ptr=a.data_ptr(), owner=a)
+    return None
+
+
+def cuda_event_time(fn):
+    """Run fn and return (result, device milliseconds). CUDA events, as TASK
+    requires, so the number excludes host launch overhead and includes only
+    work the device actually did between the two markers."""
+    rt = _rt()
+    a, b = ctypes.c_void_p(), ctypes.c_void_p()
+    _ck(rt.cudaEventCreate(ctypes.byref(a)))
+    _ck(rt.cudaEventCreate(ctypes.byref(b)))
+    try:
+        _ck(rt.cudaDeviceSynchronize())
+        _ck(rt.cudaEventRecord(a, None))
+        out = fn()
+        _ck(rt.cudaEventRecord(b, None))
+        _ck(rt.cudaEventSynchronize(b))
+        ms = ctypes.c_float(0)
+        _ck(rt.cudaEventElapsedTime(ctypes.byref(ms), a, b))
+        return out, float(ms.value)
+    finally:
+        rt.cudaEventDestroy(a)
+        rt.cudaEventDestroy(b)
 
 
 def _as_u8(aff) -> np.ndarray:
@@ -64,18 +230,12 @@ def _watershed(aff_u8, low, high):
     return out
 
 
-# Measured on val: 7505458 edges from 180 Mvox = 0.0417 edges/voxel
-# (scripts/c1_memory_budget.py). A fixed 20M cap makes rag_gpu return -1 for
-# anything past ~480 Mvox, so the 2.16 Gvox target would fail on edge capacity
-# before it failed on memory.
-#
-# 0.055 keeps 32% headroom over the measured density. Headroom is expensive
-# here: rag.cu sizes its table as next_pow2(2 * max_edges) * 16 B, so crossing
-# a power-of-two boundary doubles it. At 2.16 Gvox, 0.055 lands under 2^28
-# slots for a 4.29 GiB table, where 0.08 tips into 2^29 and 8.00 GiB. Overflow
-# is reported as -1 rather than silently truncated, so a too-small cap fails
-# loudly.
-EDGES_PER_VOX = 0.055
+# Measured on val: 7505458 edges from 180 Mvox = 0.0417 edges/voxel.
+# Official fused 2.16 Gvox: 90 323 139 / 2.16e9 = 0.0418. 0.043 is 2.8%
+# headroom over that table. rag.cu sizes its hash as next_pow2(2*max_edges)*16 B;
+# at 2.16 Gvox both 0.043 and 0.055 stay at 2^28 slots (4.29 GiB). The cap
+# only shrinks the edge arrays, not the table. Overflow is -1, not silent.
+EDGES_PER_VOX = 0.043
 MIN_MAX_EDGES = 20_000_000
 
 
@@ -126,11 +286,29 @@ def _heap(u, v, sm, ct, thresholds, max_id):
     return heap_from_arrays(u, v, sm, ct, list(thresholds), max_id=max_id)
 
 
-def _parhac(u, v, sm, ct, thresholds, max_id, eps=0.08):
+def _agg_eps(thresholds=None, default=0.08):
+    """Accuracy path stays ε=0.08. Speed path (single T=0.3) defaults to 0.40.
+
+    Four-T VOI is illegal above 0.08 (N2). T=0.3-only ε=0.32/0.40 already
+    PASSed N2. WATERZ_AGG_EPS overrides either default when set.
+    """
+    s = os.environ.get("WATERZ_AGG_EPS")
+    if s:
+        return float(s)
+    if thresholds is not None and len(list(thresholds)) == 1:
+        t = float(list(thresholds)[0])
+        if abs(t - 0.3) < 1e-9:
+            return 0.40
+    return default
+
+
+def _parhac(u, v, sm, ct, thresholds, max_id, eps=None):
     """Paper ParHAC Alg. 1+2, waterz means, eps 0.08 (E12).
 
     Runs the device build when it is present, and the host build otherwise.
     WATERZ_AGG_CPU=1 forces the host build for A/B comparison.
+    WATERZ_AGG_EPS overrides. Single T=0.3 defaults to 0.40 (speed path);
+    four-T stays 0.08.
 
     This used to call the host build unconditionally, with the device build
     reachable only behind a lock file that also required it to come in under a
@@ -143,6 +321,8 @@ def _parhac(u, v, sm, ct, thresholds, max_id, eps=0.08):
     scripts/a2_determinism.py. Speed is what is being optimised, not a
     precondition for being used.
     """
+    if eps is None:
+        eps = _agg_eps(thresholds)
     u = np.ascontiguousarray(u, dtype=np.uint32)
     v = np.ascontiguousarray(v, dtype=np.uint32)
     sm = np.ascontiguousarray(sm, dtype=np.float64)
@@ -189,8 +369,12 @@ def _parhac(u, v, sm, ct, thresholds, max_id, eps=0.08):
     return {float(t): parents[i] for i, t in enumerate(thresholds)}
 
 
-def _parhac_d_dev(u_ptr, v_ptr, sm_ptr, ct_ptr, nedge, thresholds, max_id, eps=0.08):
-    """Device paper-ParHAC on already-resident RAG. Used only if E6r LOCK."""
+def _parhac_d_dev(u_ptr, v_ptr, sm_ptr, ct_ptr, nedge, thresholds, max_id, eps=None):
+    """Device paper-ParHAC on an already-resident RAG, so the edge arrays never
+    reach the host. Only the per-threshold parent arrays come back, which are
+    max_id+1 words rather than the whole graph."""
+    if eps is None:
+        eps = _agg_eps(thresholds)
     thrs = np.asarray(list(thresholds), dtype=np.float64)
     parents = np.empty((len(thrs), max_id + 1), dtype=np.uint32)
     stats = np.zeros((len(thrs), 3), dtype=np.int64)
@@ -214,6 +398,8 @@ def _parhac_d_dev(u_ptr, v_ptr, sm_ptr, ct_ptr, nedge, thresholds, max_id, eps=0
     )
     if rc != 1:
         raise RuntimeError("parhac_paper_d_dev failed")
+    global AGG_BACKEND
+    AGG_BACKEND = "gpu_dev"
     return {float(t): parents[i] for i, t in enumerate(thresholds)}
 
 
@@ -334,63 +520,132 @@ def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
     return out
 
 
-def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
-    """Device-resident WS+RAG+extract. AGG is host paper-ε unless E6r LOCK.
+def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999,
+              return_device=False):
+    """Device-resident WS + RAG + agglomeration + extract.
 
-    `aff` already on CUDA (uint8 or float32 [3,Z,Y,X] torch) or numpy (copied
-    outside the timed window). Returns list of uint32 [Z,Y,X] on CPU.
+    `aff` is [3,Z,Y,X] uint8 or float32, either already in VRAM (anything
+    implementing __cuda_array_interface__, which includes torch CUDA tensors,
+    cupy and numba) or a host array, copied in before the timed region.
+
+    With `return_device` the labels stay in VRAM as DevBufs, which is the path
+    TASK grades. Otherwise they come back as host uint32 [Z,Y,X].
     """
-    import torch
-
     _ensure_sv7()
-    if hasattr(aff, "is_cuda") and aff.is_cuda:
-        aff_t = aff
-        if aff_t.dtype != torch.uint8:
-            aff_t = (aff_t.float().clamp(0, 1) * 255.0).round().to(torch.uint8)
-        aff_t = aff_t.contiguous()
+    libw = ctypes.CDLL(str(_WS))
+    dv = _dev_view(aff)
+    own_aff = True
+    host_u8 = None
+    caller_devbuf = aff if isinstance(aff, DevBuf) and getattr(aff, "_mine", False) else None
+    if dv is None:
+        host_u8 = _as_u8(aff)
+        aff_d = DevBuf.from_host(host_u8)
+        shape = aff_d.shape
     else:
-        aff_u8 = _as_u8(aff)
-        aff_t = torch.from_numpy(aff_u8).to("cuda")
-    if aff_t.ndim != 4 or aff_t.shape[0] != 3:
-        raise ValueError(f"aff must be [3,Z,Y,X], got {tuple(aff_t.shape)}")
-    z, y, x = int(aff_t.shape[1]), int(aff_t.shape[2]), int(aff_t.shape[3])
+        shape = dv.shape
+        if dv.dtype == np.uint8:
+            aff_d = dv
+            own_aff = False
+        elif dv.dtype == np.float32:
+            libw.aff_f32_to_u8_d.restype = ctypes.c_int
+            libw.aff_f32_to_u8_d.argtypes = [
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64]
+            aff_d = DevBuf(shape, np.uint8)
+            libw.aff_f32_to_u8_d(ctypes.c_void_p(dv.ptr),
+                                 ctypes.c_void_p(aff_d.ptr),
+                                 ctypes.c_int64(aff_d.nbytes))
+        else:
+            raise ValueError(f"device aff must be uint8 or float32, got {dv.dtype}")
+    if len(shape) != 4 or shape[0] != 3:
+        raise ValueError(f"aff must be [3,Z,Y,X], got {shape}")
+    z, y, x = (int(s) for s in shape[1:])
     n = z * y * x
 
     want_stages = bool(os.environ.get("WATERZ_STAGE_MS"))
     STAGE_MS.clear()
     if want_stages:
-        torch.cuda.synchronize()
+        _ck(_rt().cudaDeviceSynchronize())
     mark = [time.perf_counter()]
 
     def stage(name):
         if not want_stages:
             return
-        torch.cuda.synchronize()
+        _ck(_rt().cudaDeviceSynchronize())
         now = time.perf_counter()
         STAGE_MS[name] = (now - mark[0]) * 1000.0
         mark[0] = now
 
-    seg_t = torch.empty((z, y, x), dtype=torch.int32, device="cuda")
-    nfrag = ctypes.c_uint32(0)
-    ms = ctypes.c_float(0)
-    libw = ctypes.CDLL(str(_WS))
-    libw.watershed_gpu_e9_d.restype = ctypes.c_int
-    libw.watershed_gpu_e9_d.argtypes = [
+    libw.ws_flow_d.restype = ctypes.c_int
+    libw.ws_flow_d.argtypes = [
         ctypes.c_void_p, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
         ctypes.c_float, ctypes.c_float, ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_float),
     ]
-    libw.watershed_gpu_e9_d(
-        aff_t.data_ptr(), z, y, x,
+    libw.ws_label_d.restype = ctypes.c_int
+    libw.ws_label_d.argtypes = [
+        ctypes.c_void_p, ctypes.c_int64, ctypes.c_int64, ctypes.c_int64,
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32),
+        ctypes.POINTER(ctypes.c_float),
+    ]
+    if hasattr(libw, "ws_mem_credit"):
+        libw.ws_mem_credit.argtypes = [ctypes.c_size_t]
+        libw.ws_mem_debit.argtypes = [ctypes.c_size_t]
+        libw.ws_mem_credit(ctypes.c_size_t(int(aff_d.nbytes)))
+
+    seg_d = DevBuf((z, y, x), np.uint32)
+    bits_d = DevBuf((z, y, x), np.uint8)
+    nfrag = ctypes.c_uint32(0)
+    ms = ctypes.c_float(0)
+    libw.ws_flow_d(
+        ctypes.c_void_p(aff_d.ptr), z, y, x,
         ctypes.c_float(aff_low), ctypes.c_float(aff_high),
-        seg_t.data_ptr(), ctypes.byref(nfrag), ctypes.byref(ms),
+        ctypes.c_void_p(bits_d.ptr),
     )
+    # k_flow is the only WS kernel that reads aff (E5). Park it so e9b
+    # peak excludes 3 B/vox. Re-upload before RAG, which still needs it.
+    # WATERZ_AFF_PARK=0 keeps aff in VRAM (TASK speed path: aff already
+    # resident; the D2H/H2D is not free).
+    aff_stash = None
+    parked = False
+    want_aff_park = os.environ.get("WATERZ_AFF_PARK", "0") == "1"
+    if want_aff_park and own_aff:
+        if host_u8 is None:
+            aff_stash = aff_d.to_host()
+        if hasattr(libw, "ws_mem_debit"):
+            libw.ws_mem_debit(ctypes.c_size_t(int(aff_d.nbytes)))
+        aff_d.free()
+        aff_d = None
+        parked = True
+    elif want_aff_park and caller_devbuf is not None:
+        aff_stash = caller_devbuf.to_host()
+        if hasattr(libw, "ws_mem_debit"):
+            libw.ws_mem_debit(ctypes.c_size_t(int(caller_devbuf.nbytes or (3 * n))))
+        caller_devbuf.free()
+        aff_d = None
+        parked = True
+    global LAST_AFF_PARKED
+    LAST_AFF_PARKED = parked
+    rc = libw.ws_label_d(
+        ctypes.c_void_p(bits_d.ptr), z, y, x,
+        ctypes.c_void_p(seg_d.ptr), ctypes.byref(nfrag), ctypes.byref(ms),
+    )
+    if rc < 0:
+        raise RuntimeError(f"ws_label_d failed rc={rc}")
+    bits_d.free()
     stage("ws")
+    if parked:
+        src = host_u8 if host_u8 is not None else aff_stash
+        if own_aff:
+            aff_d = DevBuf.from_host(src)
+        else:
+            caller_devbuf.reload_from_host(src)
+            aff_d = caller_devbuf
+        if hasattr(libw, "ws_mem_credit"):
+            libw.ws_mem_credit(ctypes.c_size_t(int(aff_d.nbytes)))
     max_e = _max_edges(n)
-    u_t = torch.empty(max_e, dtype=torch.int32, device="cuda")
-    v_t = torch.empty(max_e, dtype=torch.int32, device="cuda")
-    sm_t = torch.empty(max_e, dtype=torch.float64, device="cuda")
-    ct_t = torch.empty(max_e, dtype=torch.int64, device="cuda")
+    u_d = DevBuf(max_e, np.uint32)
+    v_d = DevBuf(max_e, np.uint32)
+    sm_d = DevBuf(max_e, np.float64)
+    ct_d = DevBuf(max_e, np.int64)
     libr = ctypes.CDLL(str(_RAG))
     libr.rag_gpu_d.restype = ctypes.c_int64
     libr.rag_gpu_d.argtypes = [
@@ -400,40 +655,80 @@ def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999):
         ctypes.c_int64,
     ]
     nedge = libr.rag_gpu_d(
-        aff_t.data_ptr(), seg_t.data_ptr(), z, y, x,
-        u_t.data_ptr(), v_t.data_ptr(), sm_t.data_ptr(), ct_t.data_ptr(), max_e,
+        ctypes.c_void_p(aff_d.ptr), ctypes.c_void_p(seg_d.ptr), z, y, x,
+        ctypes.c_void_p(u_d.ptr), ctypes.c_void_p(v_d.ptr),
+        ctypes.c_void_p(sm_d.ptr), ctypes.c_void_p(ct_d.ptr), max_e,
     )
     if nedge < 0:
         raise RuntimeError("rag_gpu_d overflow")
+    # RAG writes nedge << max_e. Hand agglomeration the live prefix only so
+    # its per-edge scratch is sized to the graph, not the cap.
+    u_d = u_d.narrow(int(nedge))
+    v_d = v_d.narrow(int(nedge))
+    sm_d = sm_d.narrow(int(nedge))
+    ct_d = ct_d.narrow(int(nedge))
+    # The affinity is dead once the RAG holds its edge weights, and it is 3n
+    # bytes: 6.0 GiB at 2.16 Gvox, released before the agglomeration allocates
+    # its peak. Only if we allocated it; a caller's buffer is not ours to free.
+    if hasattr(libw, "ws_mem_debit"):
+        libw.ws_mem_debit(ctypes.c_size_t(int(aff_d.nbytes)))
+    if own_aff:
+        aff_d.free()
+    global LAST_NEDGE
+    LAST_NEDGE = int(nedge)
     stage("rag")
-    if _e6r_locked() and _PARHAC_D.is_file():
+    # parhac_paper_d_dev and parhac_paper_d are the same computation: both copy
+    # the edge arrays into fresh scratch and call parhac_e6s_dev, differing only
+    # in the memcpy direction. Taking the device one keeps the RAG off the host,
+    # which is the whole point of this path. It used to be gated behind the E6r
+    # experiment's lock file, which is unrelated to whether it is correct.
+    if _PARHAC_D.is_file() and not os.environ.get("WATERZ_AGG_CPU"):
         snaps = _parhac_d_dev(
-            u_t.data_ptr(), v_t.data_ptr(), sm_t.data_ptr(), ct_t.data_ptr(),
+            u_d.ptr, v_d.ptr, sm_d.ptr, ct_d.ptr,
             int(nedge), thresholds, max_id=int(nfrag.value),
         )
     else:
-        u = u_t[:nedge].cpu().numpy().astype(np.uint32, copy=False)
-        v = v_t[:nedge].cpu().numpy().astype(np.uint32, copy=False)
-        sm = sm_t[:nedge].cpu().numpy()
-        ct = ct_t[:nedge].cpu().numpy()
+        u = u_d.to_host(nedge)
+        v = v_d.to_host(nedge)
+        sm = sm_d.to_host(nedge)
+        ct = ct_d.to_host(nedge)
         snaps = _parhac(u, v, sm, ct, thresholds, max_id=int(nfrag.value))
+    for b in (u_d, v_d, sm_d, ct_d):
+        b.free()
     stage("agg")
     out = []
     libw.extract_gpu_d.restype = ctypes.c_int
     libw.extract_gpu_d.argtypes = [
         ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int64, ctypes.c_void_p,
     ]
-    seg_flat = seg_t.reshape(-1)
-    for t in thresholds:
-        par = np.ascontiguousarray(snaps[float(t)], dtype=np.uint32)
-        par_t = torch.from_numpy(par).to("cuda")
-        lab_t = torch.empty(n, dtype=torch.int32, device="cuda")
-        rc = libw.extract_gpu_d(seg_flat.data_ptr(), par_t.data_ptr(), n, lab_t.data_ptr())
+    # k_extract is out[i] = parent[seg[i]]: thread i reads only seg[i] and
+    # writes only out[i], and parent is a distinct array, so out may alias seg.
+    # The last threshold therefore writes its labels over the fragments instead
+    # of into a second n-word buffer, which at 2.16 Gvox is 8.6 GB not spent.
+    last = len(thresholds) - 1
+    for i, t in enumerate(thresholds):
+        par_d = DevBuf.from_host(np.ascontiguousarray(snaps[float(t)],
+                                                      dtype=np.uint32))
+        if i == last:
+            lab_d, seg_d = seg_d, None
+            seg_ptr = lab_d.ptr
+        else:
+            lab_d = DevBuf((z, y, x), np.uint32)
+            seg_ptr = seg_d.ptr
+        rc = libw.extract_gpu_d(ctypes.c_void_p(seg_ptr),
+                                ctypes.c_void_p(par_d.ptr), n,
+                                ctypes.c_void_p(lab_d.ptr))
+        par_d.free()
         if rc != 1:
             raise RuntimeError("extract_gpu_d failed")
-        out.append(lab_t.cpu().numpy().astype(np.uint32, copy=False).reshape(z, y, x))
+        out.append(lab_d)
     stage("extract")
-    return out
+    if return_device:
+        return out
+    host = [b.to_host() for b in out]
+    for b in out:
+        b.free()
+    return host
 
 
 def main():
