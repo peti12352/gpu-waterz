@@ -4,11 +4,9 @@ GPU affinity-flow watershed + contact-mean agglomeration. Matches stock
 [`waterz`](https://github.com/funkey/waterz) partition quality on CREMI-A
 affinities; call it from numpy or torch CUDA tensors.
 
-**Pipeline guide:** [docs/pipeline.md](docs/pipeline.md) |
-**CUDA build:** [docs/build.md](docs/build.md) |
-**Atlas:** [notes/ATLAS.md](notes/ATLAS.md) |
-**VOI table:** [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv) |
-**Open questions:** [notes/PROBLEM.md](notes/PROBLEM.md)
+Docs: [pipeline](docs/pipeline.md), [CUDA build](docs/build.md),
+[campaign atlas](notes/ATLAS.md), [VOI atlas CSV](data/cache/voi_atlas.csv),
+[open questions](notes/PROBLEM.md).
 
 ---
 
@@ -84,7 +82,18 @@ gunpowder/torch train -> daisy predict -> [gpu_waterz decode] -> zarr
 Speeds the waterz-class decode. Does not replace proofreading stacks or
 end-to-end query models (e.g. AGQ).
 
-## Motivation
+## Problem
+
+In connectomics pipelines the expensive trained step is usually affinity
+prediction. The remaining decode -- watershed fragments, region graph, and
+hierarchical agglomeration -- is still often a CPU ``waterz`` call inside
+daisy/LSD-style workers. That call is hard to accelerate without changing the
+partition: contact-mean scores reweight after every merge, so naive Kruskal /
+mutex / frozen-edge GPU tricks are a different algorithm. Thresholds are easy
+to misuse (stock waterz scores vs affinity), and production stacks want stage
+hooks (fragments / RAG / merge) rather than only a monolith. Exact average-
+linkage HAC has no friendly parallel exact algorithm; any GPU path must be
+approximate and still match waterz VOI.
 
 CNNs predict 3D affinities on GPU; CPU ``waterz`` decode is often the slow
 step (~6.7 Mvox/s single-threaded on this workload). This repo runs:
