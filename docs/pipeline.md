@@ -26,7 +26,11 @@ labs = wz.segment_d(aff, [0.3], return_device=True)
 lab_t = wz.to_torch(labs[0])  # stays on GPU via CAI when possible
 ```
 
-Install: ``pip install -e .`` then ``bash scripts/build_cuda.sh`` (needs nvcc).
+Install: ``uv sync`` then ``bash scripts/build_cuda.sh`` (needs nvcc).
+
+```bash
+uv run python examples/torch_to_labels.py
+```
 
 ## Daisy / LSD worker sketch (no Mongo)
 

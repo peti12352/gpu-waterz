@@ -4,6 +4,7 @@ Requires a CUDA toolkit with ``nvcc`` (lab default: 12.8). Fatbin targets
 ``sm_86`` and ``sm_120`` (see ``scripts/b_dev_aff.nvcc_arch_flags``).
 
 ```bash
+uv sync
 bash scripts/build_cuda.sh
 # or: WATERZ_NVCC=/path/to/nvcc bash scripts/build_cuda.sh
 ```
@@ -14,6 +15,6 @@ Outputs (gitignored ``*.so``):
 - ``src/librag_gpu.so`` from ``csrc/rag.cu``
 - ``src/libparhac_d.so`` from ``csrc/parhac_d.cu``
 
-Check: ``python -c "import gpu_waterz as w; print(w.cuda_libs_ready())"``.
+Check: ``uv run python -c "import gpu_waterz as w; print(w.cuda_libs_ready())"``.
 
-Editable install does not compile CUDA; build the ``.so`` files separately.
+``uv sync`` installs the Python package only; build the ``.so`` files separately.

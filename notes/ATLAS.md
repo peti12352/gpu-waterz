@@ -1,32 +1,39 @@
 # GPU waterz campaign atlas
 
-**Not a 2 Gvox/s number. Not a 3090 Ti number.** Parks off. Identity vs `wz_fragments.npy` is diagnostic; four-T VOI is the ship bar.
+Affinity-flow watershed + contact-mean ParHAC on CREMI-A: what cleared the
+VOI bar, what died, and measured stage times. Lab notebook: [LOG.md](LOG.md).
+Pinned quotes: [SOURCES.md](../papers/SOURCES.md). Machine-readable negatives:
+[voi_atlas.csv](../data/cache/voi_atlas.csv). Remaining problem: [PROBLEM.md](PROBLEM.md).
+Dead stamps: [n19_dead.jsonl](../data/cache/n19_dead.jsonl). Historical
+evaluation contract (for log cross-refs only): [TASK.md](../TASK.md).
 
-This is the 30-minute document. Full lab notebook: [LOG.md](LOG.md). Contract: [TASK.md](../TASK.md). Pinned quotes: [SOURCES.md](../papers/SOURCES.md). Machine-readable negatives: [voi_atlas.csv](../data/cache/voi_atlas.csv). Remaining problem: [PROBLEM.md](PROBLEM.md). Dead stamps: [n19_dead.jsonl](../data/cache/n19_dead.jsonl).
-
-Dev card for every speed number below: idle **RTX 5090 32 GB**, greengoblin, CUDA events, affinity already in VRAM unless a note says otherwise. The graded card is a **3090 Ti**. Do not substitute.
+**Measurement card for every speed number below:** idle **RTX 5090 32 GB**,
+greengoblin, CUDA events, affinity already in VRAM unless a note says otherwise.
+Do not treat 5090 throughput as portable across GPUs without remeasurement.
+Identity vs `wz_fragments.npy` is diagnostic; four-threshold VOI is the quality bar.
+Parks off on the timed path.
 
 ---
 
 ## Part I  -  Research report and log
 
-### 1. The contract (what "solved" means)
+### 1. Quality and throughput targets used in this campaign
 
 GPU implementation of stock `waterz`: affinity-flow fragments **and** contact-mean agglomeration -> final uint32 labels. A bare over-segmentation is not the deliverable.
 
-| Gate | Number | Pin |
+| Target | Number | Notes |
 |---|---|---|
-| Accuracy | VOI split **and** merge <= baseline+0.02 at aff **0.2, 0.3, 0.4, 0.5** on CREMI-A val `[3,125,1200,1200]` | [TASK.md](../TASK.md) |
-| Speed | median-of-5 >= **2 Gvox/s** on official `make_big` `[3,375,2400,2400]` = 2.16 Gvox @ T=0.3, **RTX 3090 Ti**, aff already in VRAM | TASK |
-| Fit | 24 GB | TASK |
-| Det | byte-identical labels run-to-run (waterz itself is not) | TASK line 118 |
+| Accuracy | VOI split **and** merge <= baseline+0.02 at aff **0.2, 0.3, 0.4, 0.5** on CREMI-A val `[3,125,1200,1200]` | matched stock waterz |
+| Throughput (research stretch) | ~2 Gvox/s class on 2.16 Gvox @ T=0.3 | **not hit**; see Part III |
+| Fit | stage peaks must fit ~24 GB class cards | z-slab path |
+| Det | byte-identical labels run-to-run (waterz itself is not) | |
 
-Reference cost: 6.7 Mvox/s single-thread; val 26.9 s; 2.16 WS+RAG alone 145 s. Target ~ **1080 ms** e2e. Thresholds in the API are **affinity**; waterz scores are `1-aff` ([THRESHOLD.md](THRESHOLD.md)).
+Reference cost: 6.7 Mvox/s single-thread CPU waterz; val 26.9 s; 2.16 WS+RAG alone 145 s. Thresholds in the API are **affinity**; waterz scores are `1-aff` ([THRESHOLD.md](THRESHOLD.md)).
 
 Two facts that decided every later sprint ([PLAN.md](../PLAN.md) section 1; SOURCES S3, S17, S29):
 
 1. **Mean affinity is not Kruskal.** Contact-area reweight after merge (`MeanAffinityProvider::addAffinity`). Frozen-weight MST / mutex / AbsMax are a different partition class.
-2. **Exact average-linkage HAC is P-complete / CC-hard** (ParHAC 2022 Thm 1.2; Abboud et al. ICALP 2024). No poly-log exact MEAN. TASK allows approximate order **if VOI holds**.
+2. **Exact average-linkage HAC is P-complete / CC-hard** (ParHAC 2022 Thm 1.2; Abboud et al. ICALP 2024). No poly-log exact MEAN. Approximate order is acceptable **if VOI holds**.
 
 Vendored waterz: `funkey/waterz` commit `a0184d2` (SOURCES header).
 

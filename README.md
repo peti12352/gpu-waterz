@@ -15,8 +15,9 @@ affinities; call it from numpy or torch CUDA tensors.
 ## Install / quickstart
 
 ```bash
-pip install -e .
+uv sync
 bash scripts/build_cuda.sh   # needs nvcc; writes src/lib*.so
+uv run python examples/torch_to_labels.py
 ```
 
 ```python
@@ -131,7 +132,7 @@ Vendored waterz pin: ``funkey/waterz`` ``a0184d2``.
 3. **RAG (GPU).** Three negative dirs; atomic ``(sum, count)``; mean = sum/count.
 4. **Agglomeration (GPU).** Paper-style ParHAC; dual-eps as above.
 
-Recommended env for the graded stack:
+Recommended env for the measured VOI stack:
 
 ```
 WATERZ_UF_ALGO=3 WATERZ_HOST_PARK=0 WATERZ_AFF_PARK=0 WATERZ_AGG_LEVERS=15
@@ -173,7 +174,7 @@ Open questions: [notes/PROBLEM.md](notes/PROBLEM.md).
 ## Divergence from stock waterz
 
 - Deterministic plateau/basin ties (fixed dir + min index).
-- Fragment IDs need not match; partition is graded.
+- Fragment IDs need not match; the partition is what is compared.
 - Agglomeration is (1+eps) ParHAC, not the serial exact heap.
 
 ## Known failure modes
