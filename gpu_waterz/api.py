@@ -5,9 +5,9 @@ Naming:
 - ``segment`` / ``agglomerate``: end-to-end affinities -> labels (stock
   ``waterz.agglomerate`` role). Returns a list, not a generator.
 - ``fragments`` / ``region_graph``: LSD/daisy-style stage hooks.
-- Thresholds are **affinity** (merge while mean_aff > thr). Stock waterz
-  default scoring is ``OneMinus<MeanAffinity>`` so its thresholds are scores;
-  use ``scores_to_affinity`` when porting score lists.
+- Thresholds default to **affinity** (merge while mean_aff > thr). Stock
+  waterz default scoring is ``OneMinus<MeanAffinity>`` so its thresholds are
+  scores; pass ``threshold_mode="score"`` or use ``scores_to_affinity``.
 """
 from __future__ import annotations
 
@@ -21,10 +21,27 @@ from gpu_waterz._backend import REQUIRED_SOS, ROOT, seg
 
 DevBuf = seg.DevBuf
 
+THRESHOLD_MODES = ("affinity", "score")
+
 
 def cuda_libs_ready() -> bool:
     """True when the shared libraries needed by the GPU path are present."""
     return all(p.is_file() for p in REQUIRED_SOS)
+
+
+def missing_cuda_libs() -> list[str]:
+    return [p.name for p in REQUIRED_SOS if not p.is_file()]
+
+
+def require_cuda_libs() -> None:
+    """Raise with a build hint instead of a ctypes crash."""
+    missing = missing_cuda_libs()
+    if missing:
+        raise RuntimeError(
+            "CUDA libraries missing: "
+            + ", ".join(missing)
+            + ". Run: bash scripts/build_cuda.sh"
+        )
 
 
 def scores_to_affinity(scores: Sequence[float]) -> list[float]:
@@ -40,6 +57,26 @@ def affinity_to_scores(thresholds: Sequence[float]) -> list[float]:
     return [1.0 - float(t) for t in thresholds]
 
 
+def resolve_thresholds(
+    thresholds: Sequence[float],
+    threshold_mode: str = "affinity",
+) -> list[float]:
+    """Return affinity thresholds. Never infers units from magnitude."""
+    mode = str(threshold_mode)
+    if mode not in THRESHOLD_MODES:
+        raise ValueError(
+            f"threshold_mode must be 'affinity' or 'score', got {threshold_mode!r}"
+        )
+    vals = [float(t) for t in thresholds]
+    if mode == "score":
+        return scores_to_affinity(vals)
+    return vals
+
+
+def _is_cuda_torch(aff: Any) -> bool:
+    return bool(hasattr(aff, "is_cuda") and aff.is_cuda)
+
+
 def segment(
     aff: Any,
     thresholds: Sequence[float],
@@ -48,20 +85,29 @@ def segment(
     aff_high: float = 0.9999,
     eps: float | None = None,
     return_device: bool = False,
+    threshold_mode: str = "affinity",
 ) -> list[Any]:
-    """End-to-end affinity -> labels. Thresholds are affinity, not waterz scores.
+    """End-to-end affinity -> labels.
 
-    ``eps`` sets ParHAC (1+eps). None uses ``WATERZ_AGG_EPS`` or dual-eps
-    defaults (0.08 multi-T / 0.40 single T=0.3). Host numpy and CUDA CAI
-    inputs are accepted; ``return_device=True`` keeps labels in VRAM as DevBuf.
+    Thresholds are affinity unless ``threshold_mode="score"``. ``eps`` sets
+    ParHAC (1+eps). None uses ``WATERZ_AGG_EPS`` or dual-eps defaults
+    (0.08 multi-T / 0.40 single T=0.3). Host numpy and CUDA CAI inputs are
+    accepted. CUDA torch input with ``return_device=True`` returns torch
+    tensors; otherwise DevBuf when ``return_device=True``.
     """
-    if return_device or getattr(aff, "__cuda_array_interface__", None) is not None:
-        return seg.segment_d(
-            aff, list(thresholds), aff_low=aff_low, aff_high=aff_high,
+    aff_thr = resolve_thresholds(thresholds, threshold_mode)
+    require_cuda_libs()
+    use_dev = return_device or getattr(aff, "__cuda_array_interface__", None) is not None
+    if use_dev:
+        out = seg.segment_d(
+            aff, aff_thr, aff_low=aff_low, aff_high=aff_high,
             return_device=return_device, eps=eps,
         )
+        if return_device and _is_cuda_torch(aff):
+            return [to_torch(b) for b in out]
+        return out
     return seg.segment(
-        aff, list(thresholds), aff_low=aff_low, aff_high=aff_high, eps=eps,
+        aff, aff_thr, aff_low=aff_low, aff_high=aff_high, eps=eps,
     )
 
 
@@ -73,7 +119,8 @@ def agglomerate(
     """Alias of ``segment`` for stock-waterz name familiarity.
 
     Unlike ``waterz.agglomerate``, this returns a list of copied/owned label
-    volumes (not an in-place generator), and thresholds are affinity.
+    volumes (not an in-place generator). Default thresholds are affinity;
+    pass ``threshold_mode="score"`` for stock heap scores.
     """
     return segment(aff, thresholds, **kwargs)
 
@@ -85,12 +132,18 @@ def segment_d(
     aff_high: float = 0.9999,
     return_device: bool = False,
     eps: float | None = None,
+    threshold_mode: str = "affinity",
 ) -> list[Any]:
     """Device-resident end-to-end path (see ``src.segment.segment_d``)."""
-    return seg.segment_d(
-        aff, list(thresholds), aff_low=aff_low, aff_high=aff_high,
+    aff_thr = resolve_thresholds(thresholds, threshold_mode)
+    require_cuda_libs()
+    out = seg.segment_d(
+        aff, aff_thr, aff_low=aff_low, aff_high=aff_high,
         return_device=return_device, eps=eps,
     )
+    if return_device and _is_cuda_torch(aff):
+        return [to_torch(b) for b in out]
+    return out
 
 
 def fragments(
@@ -103,6 +156,7 @@ def fragments(
     aff_u8 = seg._as_u8(aff)
     if aff_u8.ndim != 4 or aff_u8.shape[0] != 3:
         raise ValueError(f"aff must be [3,Z,Y,X], got {aff_u8.shape}")
+    require_cuda_libs()
     return seg._watershed(aff_u8, aff_low, aff_high)
 
 
@@ -122,6 +176,7 @@ def region_graph(
     if frag.shape != aff_u8.shape[1:]:
         raise ValueError(
             f"frag shape {frag.shape} != aff spatial {aff_u8.shape[1:]}")
+    require_cuda_libs()
     u, v, sm, ct = seg._rag(aff_u8, frag)
     mean = sm / np.maximum(ct.astype(np.float64), 1.0)
     return {"u": u, "v": v, "sum": sm, "count": ct, "mean": mean}
@@ -141,14 +196,16 @@ def from_torch(t: Any) -> Any:
 
 
 def to_torch(buf: Any, device: str | None = None) -> Any:
-    """Wrap labels as a torch tensor. DevBuf / CAI stay on device when possible."""
+    """Wrap labels as a torch tensor. CAI stays on CUDA (do not CPU-copy).
+
+    ``torch.as_tensor`` on a CUDA Array Interface object can land on CPU
+    (pytorch issue 54139). Always pass device=cuda for CAI unless overridden.
+    """
     import torch
 
     if hasattr(buf, "__cuda_array_interface__"):
-        out = torch.asarray(buf)
-        if device is not None:
-            out = out.to(device)
-        return out
+        dev = device if device is not None else "cuda"
+        return torch.asarray(buf, device=dev)
     arr = np.ascontiguousarray(buf)
     if device is None:
         return torch.as_tensor(arr)

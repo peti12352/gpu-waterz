@@ -6,7 +6,7 @@ affinities; call it from numpy or torch CUDA tensors.
 
 Docs: [pipeline](docs/pipeline.md), [CUDA build](docs/build.md),
 [campaign atlas](notes/ATLAS.md), [VOI atlas CSV](data/cache/voi_atlas.csv),
-[open questions](notes/PROBLEM.md).
+[open questions](notes/PROBLEM.md), [engineering note](docs/hn.md).
 
 ---
 
@@ -55,9 +55,9 @@ Details: [notes/THRESHOLD.md](notes/THRESHOLD.md).
 
 | Function | Role |
 |---|---|
-| ``segment(aff, thresholds, *, eps=None, ...)`` | e2e labels (affinity thresholds) |
+| ``segment(aff, thresholds, *, threshold_mode="affinity", eps=None, ...)`` | e2e labels |
 | ``agglomerate(...)`` | alias of ``segment`` (list, not waterz generator) |
-| ``segment_d(..., return_device=True)`` | device-resident path |
+| ``segment_d(..., return_device=True)`` | device-resident path; torch CUDA in -> torch out |
 | ``fragments(aff)`` | watershed only |
 | ``region_graph(aff, frag)`` | contact-mean RAG arrays |
 | ``scores_to_affinity`` / ``affinity_to_scores`` | unit conversion |

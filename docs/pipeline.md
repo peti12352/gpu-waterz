@@ -6,13 +6,14 @@
 |---|---|---|
 | Entry | ``waterz.agglomerate`` (generator) | ``gpu_waterz.segment`` / ``agglomerate`` (list) |
 | Device | CPU C++ | CUDA WS + RAG + ParHAC |
-| Thresholds | often **scores** under ``OneMinus<MeanAffinity>`` | **affinity** (merge while mean_aff > thr) |
+| Thresholds | often **scores** under ``OneMinus<MeanAffinity>`` | **affinity** unless ``threshold_mode="score"`` |
 | Stages | mostly monolith; optional fragments arg | ``fragments``, ``region_graph``, e2e |
 | Quality | exact serial heap | (1+eps) contact-mean ParHAC; VOI-matched on CREMI-A |
 
-Convert stock score lists with ``gpu_waterz.scores_to_affinity``.
+Convert stock score lists with ``gpu_waterz.scores_to_affinity`` or
+``threshold_mode="score"``. Do not infer units from the numeric range.
 
-Pinned stock API: https://github.com/funkey/waterz  
+Pinned stock API: https://github.com/funkey/waterz
 Pinned PC fork (region-graph helpers): https://github.com/PytorchConnectomics/waterz
 
 ## Quick path (torch CUDA)
@@ -23,16 +24,22 @@ import gpu_waterz as wz
 
 aff = torch.rand(3, 32, 64, 64, device="cuda", dtype=torch.float32)
 labs = wz.segment_d(aff, [0.3], return_device=True)
-lab_t = wz.to_torch(labs[0])  # stays on GPU via CAI when possible
+# labs[0] is already a CUDA torch tensor
+# or wrap a DevBuf: wz.to_torch(buf)  # device=cuda for CAI
 ```
 
 Install: ``uv sync`` then ``bash scripts/build_cuda.sh`` (needs nvcc).
 
 ```bash
 uv run python examples/torch_to_labels.py
+uv run python examples/zarr_block.py
 ```
 
+Missing ``src/lib*.so`` raises ``RuntimeError`` pointing at ``scripts/build_cuda.sh``.
+
 ## Daisy / LSD worker sketch (no Mongo)
+
+Runnable version: ``examples/zarr_block.py``.
 
 1. Read affinity block from zarr (layout ``[3,Z,Y,X]``).
 2. ``gpu_waterz.segment(aff, [thr])`` or stage ``fragments`` then ``region_graph``.
@@ -46,7 +53,7 @@ merge-from-fragments (closer to our ParHAC stage after ``fragments``).
 ## What we do not do
 
 - No gunpowder ``BatchFilter`` in-tree
-- No Lu distributed freeze / exact chunk-stitch product (arXiv:2106.10795)
+- No Lu distributed freeze / exact chunk-stitch product (https://arxiv.org/abs/2106.10795)
 - No ChunkedGraph / CAVE client
 - No claim of end-to-end SOTA vs query models (e.g. AGQ); this is a faster
   waterz-class decode for affinities you already have
