@@ -524,6 +524,38 @@ def segment(aff, thresholds, aff_low=1e-4, aff_high=0.9999, eps=None):
     return out
 
 
+def segment_from_fragments(aff, frag, thresholds, eps=None):
+    """Contact-mean ParHAC + extract on existing fragments (no watershed).
+
+    Same agglomeration as ``segment`` (still mean / ParHAC). For an LSD-style
+    split where another worker already wrote fragments. Thresholds are affinity.
+    Published four-T VOI numbers assume our watershed fragments on CREMI-A, not
+    an arbitrary fragment field.
+    """
+    aff_u8 = _as_u8(aff)
+    if aff_u8.ndim != 4 or aff_u8.shape[0] != 3:
+        raise ValueError(f"aff must be [3,Z,Y,X], got {aff_u8.shape}")
+    frag = np.ascontiguousarray(frag, dtype=np.uint32)
+    if frag.shape != aff_u8.shape[1:]:
+        raise ValueError(
+            f"frag shape {frag.shape} != aff spatial {aff_u8.shape[1:]}")
+    STAGE_MS.clear()
+    t0 = time.perf_counter()
+    u, v, sm, ct = _rag(aff_u8, frag)
+    t1 = time.perf_counter()
+    snaps = _parhac(u, v, sm, ct, thresholds, max_id=int(frag.max()), eps=eps)
+    t2 = time.perf_counter()
+    out = [
+        _extract_gpu(frag, snaps[float(t)]).reshape(frag.shape).astype(
+            np.uint32, copy=False)
+        for t in thresholds
+    ]
+    t3 = time.perf_counter()
+    STAGE_MS.update(ws=0.0, rag=(t1 - t0) * 1e3,
+                    agg=(t2 - t1) * 1e3, extract=(t3 - t2) * 1e3)
+    return out
+
+
 def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999,
               return_device=False, eps=None):
     """Device-resident WS + RAG + agglomeration + extract.

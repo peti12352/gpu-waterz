@@ -20,7 +20,7 @@ zarr = ["zarr"]
 
 [project.urls]
 Repository = "https://github.com/peti12352/gpu-waterz"
-Documentation = "https://github.com/peti12352/gpu-waterz/blob/master/docs/pipeline.md"
+Documentation = "https://github.com/peti12352/gpu-waterz#readme"
 
 [dependency-groups]
 dev = ["pytest>=7"]

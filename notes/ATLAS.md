@@ -1,5 +1,7 @@
 # GPU waterz campaign atlas
 
+Library docs: [README](../README.md). This file is the campaign notebook.
+
 Affinity-flow watershed + contact-mean ParHAC on CREMI-A: what cleared the
 VOI bar, what died, and measured stage times. Lab notebook: [LOG.md](LOG.md).
 Pinned quotes: [SOURCES.md](../papers/SOURCES.md). Machine-readable negatives:

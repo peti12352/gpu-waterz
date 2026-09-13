@@ -1,5 +1,8 @@
 # Threshold unit — locked from shipped script
 
+API thresholds are affinity; see [docs/usage.md](../docs/usage.md). This
+file is the lock against the shipped baseline script.
+
 Source: `data/ws_bounty/baseline/run_baseline.py` (read 2026-08-30 on greengoblin).
 
 ```

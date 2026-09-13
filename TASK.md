@@ -1,5 +1,7 @@
 # TASK.md — GPU waterz bounty
 
+Library docs: [README.md](README.md). This file is the original listing.
+
 **This file is the contract.** Gates, numbers, API, dataset, and out-of-scope
 are copied from the bounty.tech listing as received 2026-08-30. Do not
 paraphrase this file. `PLAN.md` may interpret; it may not relax a number

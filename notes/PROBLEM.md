@@ -1,11 +1,7 @@
 # Open questions
 
-Plain-language status (best timed stack, what is still open, what is closed
-and why): [WHERE_WE_ARE.md](WHERE_WE_ARE.md).
-
-See [ATLAS.md](ATLAS.md), [N20_WIN.md](N20_WIN.md), [N21_WIN.md](N21_WIN.md),
-and [N22_WIN.md](N22_WIN.md) for the measured campaign. This file states what
-is still open. Not a 2 Gvox/s number; not 3090 Ti.
+Living status: [WHERE_WE_ARE.md](WHERE_WE_ARE.md). Campaign:
+[ATLAS.md](ATLAS.md). Product docs: [../README.md](../README.md).
 
 ## Problem A -- faster contact-mean agglomeration under VOI
 
@@ -13,7 +9,7 @@ On the CREMI-A contact-mean RAG (7.5M edges @ val, ~90M @ 2.16 Gvox), build a
 GPU agglomerator such that:
 
 1. four-threshold VOI still PASSes the shipped waterz gate (aff 0.2/0.3/0.4/0.5,
-   both halves within +0.02), and
+   split and merge each within +0.02), and
 2. agglomeration wall on the 2.16 Gvox volume at aff 0.3 drops well below the
    current ~1680 ms floor (target of interest: <=1000 ms; ambitious: <=400 ms),
 

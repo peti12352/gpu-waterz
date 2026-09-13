@@ -35,6 +35,7 @@ def test_missing_lib_message(monkeypatch):
 def test_import_surface():
     for name in (
         "segment", "agglomerate", "segment_d", "fragments", "region_graph",
+        "labels_from_fragments",
         "scores_to_affinity", "from_torch", "to_torch", "cuda_libs_ready",
         "resolve_thresholds", "require_cuda_libs",
     ):
@@ -61,3 +62,6 @@ def test_segment_synthetic_shape():
     assert np.array_equal(a[0], c[0])
     d = wz.segment(aff, [0.7], threshold_mode="score")
     assert np.array_equal(a[0], d[0])
+    fr = wz.fragments(aff)
+    from_fr = wz.labels_from_fragments(aff, fr, [0.3])
+    assert np.array_equal(a[0], from_fr[0])

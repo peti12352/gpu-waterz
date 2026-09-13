@@ -1,4 +1,7 @@
-# PLAN — GPU waterz
+# PLAN — GPU waterz (2026-08-30, stale)
+
+Living status: [notes/WHERE_WE_ARE.md](notes/WHERE_WE_ARE.md).
+Library docs: [README.md](README.md). This file is the original design note.
 
 Contract: `TASK.md`. Quotes: `papers/SOURCES.md`. If this file
 softens a TASK number, delete the sentence.

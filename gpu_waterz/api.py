@@ -4,6 +4,8 @@ Naming:
 
 - ``segment`` / ``agglomerate``: end-to-end affinities -> labels (stock
   ``waterz.agglomerate`` role). Returns a list, not a generator.
+- ``labels_from_fragments``: LSD agglomerate-worker role (merge existing
+  fragments with contact-mean ParHAC).
 - ``fragments`` / ``region_graph``: LSD/daisy-style stage hooks.
 - Thresholds default to **affinity** (merge while mean_aff > thr). Stock
   waterz default scoring is ``OneMinus<MeanAffinity>`` so its thresholds are
@@ -109,6 +111,26 @@ def segment(
     return seg.segment(
         aff, aff_thr, aff_low=aff_low, aff_high=aff_high, eps=eps,
     )
+
+
+def labels_from_fragments(
+    aff: Any,
+    frag: Any,
+    thresholds: Sequence[float],
+    *,
+    eps: float | None = None,
+    threshold_mode: str = "affinity",
+) -> list[np.ndarray]:
+    """Merge existing fragments with contact-mean ParHAC (no watershed).
+
+    LSD agglomerate-worker shape: affinities + fragment volume in, labels out.
+    Still the waterz mean statistic, not mutex/Kruskal. Four-T VOI numbers in
+    the docs are for *our* watershed fragments on CREMI-A val, not this entry.
+    """
+    aff_thr = resolve_thresholds(thresholds, threshold_mode)
+    require_cuda_libs()
+    frag = np.ascontiguousarray(frag, dtype=np.uint32)
+    return seg.segment_from_fragments(aff, frag, aff_thr, eps=eps)
 
 
 def agglomerate(

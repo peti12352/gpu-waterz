@@ -1,12 +1,13 @@
 # Where we are
 
-Idle RTX 5090 measurements. Not a 2 Gvox/s claim. Not a 3090 Ti.
+Idle RTX 5090 pin for the current stack. What the algorithm is:
+[docs/decode.md](../docs/decode.md). Other GPUs:
+[docs/porting.md](../docs/porting.md). Lab index: [README.md](README.md).
+
 Quality gate: four affinity thresholds (0.2 / 0.3 / 0.4 / 0.5) must still
-match stock waterz VOI (both split and merge, both volume halves, +0.02).
-Speed numbers on the 2.16 Gvox volume are only compared after that gate, and
-only on an idle card. A val-set improvement smaller than 100 ms is treated as
-noise: an earlier trial that looked faster on the small volume was slower on
-the large one.
+match stock waterz VOI (split and merge each +0.02). Speed on 2.16 Gvox is
+compared only after that gate, on an idle card. A val-set improvement
+smaller than 100 ms is treated as noise.
 
 Product agglomeration stays paper-style ParHAC (E6s). Merge allowance is
 **(1+0.08)** when grading four thresholds, **(1+0.40)** on the single
@@ -40,9 +41,6 @@ Agglomeration at affinity 0.3: VOI split 0.4408 / merge 0.2543
 The same agglomerator on the small cached region graph (not 2.16) takes
 **456.8 ms**. That val number is a diagnostic, not the product pin.
 
-Watershed alone (1.31 s) already misses a 1.08 s end-to-end budget.
-Need about **2.9×** on this 5090 to hit 2 Gvox/s; a 3090 Ti was never timed.
-
 ---
 
 ## Remaining paths
@@ -62,18 +60,17 @@ What is actually left:
    is the wrong structure (see closed). Do not turn on the E6t code path.
 
 2. **A written ceiling, not more micro-kernels.** If the heavy agglomeration
-   kernels vanished, about 690–1130 ms of agglomeration would still remain,
+   kernels vanished, about 690-1130 ms of agglomeration would still remain,
    plus ~800 ms of watershed even in the fantasy where list-compress is free.
-   That already overruns 1.08 s on the *faster* card. The honest remaining
-   write-up is this floor, not another 20 ms env flag.
+   The honest remaining write-up is this floor, not another 20 ms env flag.
 
-3. **A real 3090 Ti run (Track C).** Unmeasured. Bandwidth-bound scaling is
-   a guess, not a number we have.
+3. **Another GPU.** Unmeasured. Do not scale 5090 times by HBM.
+   [porting.md](../docs/porting.md).
 
 4. **Shipping the identity-true env flags.** Listed insert/rebuild and
    occupied-slot emit match the current parents and pass four-threshold VOI.
-   They save 18–62 ms on the small graph and were not taken to 2.16. Turning
-   them on by default is a product choice, not a path to 2 Gvox/s.
+   They save 18-62 ms on the small graph and were not taken to 2.16. Turning
+   them on by default is a product choice, not a path off the 1680 ms agg pin.
 
 Shrinking the watershed compress list (508 ms, 71–105 million entries) is
 **not** an open speed path unless fragment identity is allowed to change.
@@ -105,7 +102,8 @@ port pointless. Timing vs 1679.9 ms only when the card is idle.
 
 Do not launch `csrc/n20_rnn_gpu_prep.cu`. Do not default
 `WATERZ_LISTED_INSERT`, `WATERZ_LISTED_REBUILD`, `WATERZ_LIST_JUMP`,
-`WATERZ_SLOT_EMIT`. Do not flip C++ defaults until a 3090 24 GB peak exists.
+`WATERZ_SLOT_EMIT`. Do not flip C++ defaults until peak VRAM is measured
+on the target card.
 
 ---
 
