@@ -1,0 +1,11 @@
+{"exp_id": "N20_UNIT", "reason": "12/12 PASS 3-node RAG", "numbers": {"host": "greengoblin", "n": 12}, "note": "notes/N20_UNIT.md"}
+{"exp_id": "N20_D1", "reason": "StarMerge EV-dead: layer0 not small-merge", "numbers": {"layer0_frac": 0.7134179010017659, "layer0_merges": 1322268, "go_star": false}, "note": "notes/N20_D1.md"}
+{"exp_id": "N20_STAR", "reason": "EV-dead gated by N20_D1; do not rewrite CUDA", "numbers": {"go_star": false}, "note": "notes/N20_STAR.md"}
+{"exp_id": "N20_D2", "reason": "full-RAG S3 heap height=12539; Abboud O(m h log n) not a 1680ms closer", "numbers": {"h_max": 12539, "heights_by_T": {"0.2": 12539, "0.3": 12364, "0.4": 12251, "0.5": 12097}, "chain_closer": false, "timing_usable_vs_1679": false}, "note": "notes/N20_D2.md"}
+{"exp_id": "N20_X4", "reason": "complete-link under-merge (expected)", "numbers": {"four_ok": false, "wall_ms": 1641522.5706612691, "timing_usable_vs_1679": true}, "note": "notes/N20_X4.md"}
+{"exp_id": "N20_X5", "reason": "WPGMA != contact-n UPGMA (expected)", "numbers": {"four_ok": false, "wall_ms": 1870452.503701672, "timing_usable_vs_1679": false}, "note": "notes/N20_X5.md"}
+{"exp_id": "N20_D3", "reason": "S3-RNN hit cap=5000 all T; no GPU NN-chain", "numbers": {"cap": 5000, "rounds": {"0.2": 5000, "0.3": 5000, "0.4": 5000, "0.5": 5000}, "hit_cap": [1, 1, 1, 1], "go_gpu_rnn": false, "timing_usable_vs_1679": true}, "note": "notes/N20_D3.md"}
+{"exp_id": "N20_RNN", "reason": "four-T FAIL (incomplete at cap); parents != heap; kill_as_closer", "numbers": {"four_ok": false, "parents_eq_heap": [false, false, false, false], "kill_as_closer": true, "go_gpu": false, "rnn_ms": 1116187.8087017685}, "note": "notes/N20_RNN.md"}
+{"exp_id": "N20_LU2", "reason": "four-T PASS; parents != heap; residual ~3.86M of 7.5M; no_speed_path", "numbers": {"four_ok": true, "parents_eq_heap": [false, false, false, false], "no_speed_path": true, "nres": [3869427, 3834038, 3801840, 3758613], "lu_ms": 6645332.652771845}, "note": "notes/N20_LU2.md"}
+{"exp_id": "N20_GPU_PREP", "reason": "inventory only; ran_gpu=false", "numbers": {"gpu_run": false, "ran_gpu": false, "go_star": false, "go_gpu_rnn": false}, "note": "notes/N20_GPU_PREP.md"}
+{"exp_id": "N20_REFUSE", "reason": "parser refuse list (Ward/cuML/Chamfer/GSHAC/GPU-UPGMA/forums)", "numbers": {"n_refused": 9}, "note": "notes/N20_REFUSE.md"}

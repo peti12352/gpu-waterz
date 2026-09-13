@@ -6,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +44,8 @@ def load_rag():
 
 
 def grade_parents(parents, fr, tag, dest_name):
+    import h5py  # only needed when writing candidate h5s
+
     dest_dir = OUT / dest_name
     dest_dir.mkdir(parents=True, exist_ok=True)
     paths = []

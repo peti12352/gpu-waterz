@@ -348,6 +348,7 @@ def run(mode, u0, v0, sm0, ct0, max_id, thr, eps, max_outer, max_layer, trace,
     alive = None
     ninner = nouter = nmerge = 0
     layer_outers, layer_merges, nlive_trace = [], [], []
+    inner_merges = []  # N20_D1: hm per inner, StarMerge EV
     sum_nlive = sum_above = 0
 
     for layer in range(10000):
@@ -537,6 +538,7 @@ def run(mode, u0, v0, sm0, ct0, max_id, thr, eps, max_outer, max_layer, trace,
 
                 nmerge += hm
                 layer_m += hm
+                inner_merges.append(int(hm))
                 if trace > 1:
                     print(f"G0     L{layer} o{outer} i{inner} "
                           f"nlive={nlive} above={nabove} nprop={nprop} "
@@ -681,6 +683,7 @@ def run(mode, u0, v0, sm0, ct0, max_id, thr, eps, max_outer, max_layer, trace,
         "nmerge": nmerge,
         "layer_outers": layer_outers,
         "layer_merges": layer_merges,
+        "inner_merges": inner_merges,
         "sum_nlive": sum_nlive,
         "sum_above": sum_above,
         "nlive_final": int(nlive),

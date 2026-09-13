@@ -777,3 +777,87 @@ N7 compact split (`n7_compact_iou.json`): hash 119.7 ms / scan 43.0 /
 radix 7.7 of 227.4 ms compact. Scan does not dominate. E2 GPU splice
 cannot realize the 3.86× N0 credited on compact.
 
+---
+
+## S43 — N20 HAC class table (queried 2026-09-11T14:37Z)
+
+Update of S42. HTTP ledger: `papers/n20_http.json`. No URL is cited
+as read unless HTTP 200 and the bytes are a PDF/HTML/JSON extract.
+Closed paywalls stamped **not obtained**. ASCII only.
+
+### Class table (contact-mean RAG, 7.5M edges, val)
+
+| Class | Paper / artifact | HTTP | VOI-legal for waterz S3? | Action |
+|---|---|---|---|---|
+| (1+eps) matching + S3 | ParHAC NeurIPS 2022 / arXiv:2206.11654 | 200 PDF | yes (eps 0.08 four-T, 0.40 T=0.3) | product; remaining win is kernel engineering |
+| exact UPGMA heap | waterz S4 / E4 | have | yes | CPU oracle for N20_RNN/LU2 |
+| exact RAC / RNN | Garg arXiv:2105.11653; Bruynooghe NUMDAM 1977/78 (local txt+pdf) | have | yes schedule | N20_RNN CPU; GPU only if D3 go |
+| complete-link | SeqHAC 2106.05610 | 200 | no (min-of-means) | N20_X4 CPU |
+| WPGMA | Murtagh/Contreras 2012 (local txt) | have | no (alpha=1/2) | N20_X5 CPU |
+| Ward / centroid in R^k | Bateni et al. arXiv:2507.20047 | 200 | no_meaning_on_rag | refuse; their §2.3 is low-height dendrogram HAC, **not** ParHAC §2.3 clustered-graph |
+| Chamfer | arXiv:2602.10444 | 200 | no | Observation 1: none of the variants satisfy reducibility |
+| GSHAC | arXiv:2604.11656 | 200 | serial exact heap on sparse geo graph | skip-class (not GPU mean-HAC) |
+| PANDORA | arXiv:2401.06089 | 200 | MST dendrogram | Kruskal-class |
+| cuSLINK | arXiv:2306.16354 | 200 | single-linkage MST | Kruskal-class |
+| cuML 26.08 AgglomerativeClustering | docs HTML | 200 | `linkage={"single"}` only | do not call RAPIDS on the RAG |
+| GPU-UPGMA 2015 DOI 10.1002/cpe.3355 | nthu 403; Wayback 200 PDF | 200 (wayback) | dense N x N, N=1e3..1e4 | memory refuse (val n=2.17e6) |
+| ParChain | arXiv:2106.04727 | 200 | CPU point-set | skip-class |
+| Šmelko MHCA thesis | CUNI bitstream 200 PDF | 200 | Mahalanobis on cytometry points | not contact-mean RAG |
+| Euro-Par Šmelko chapter | DOI 10.1007/978-3-030-29400-7_1 | 200 HTML cookie wall | not obtained | stamp not-read |
+| Defays CLINK 1977 | DOI 10.1093/comjnl/20.4.364 | 403 | not obtained | stamp not-read |
+| Chen HPCC 2012 CUDA UPGMA | DOI 10.1109/HPCC.2012.26 | 202 empty | not obtained | stamp not-read |
+| Dang PDP 2014 Ward-CUDA | DOI 10.1109/PDP.2014.18 | 202 empty | not obtained | stamp not-read |
+| CUDA forums t24259 / t8876 / t191439 | Discourse JSON | 200 | document clustering / MST / HDBSCAN | zero UPGMA kernel to port |
+| Unpaywall 10.1002/cpe.3355 | API | 422 | not obtained via Unpaywall | used Wayback instead |
+
+### Quotes (local files)
+
+ParHAC §2.3 clustered-graph (`papers/parhac_dhulipala2022.txt`):
+
+> "many of these rounds only merge a small number of vertices, and leave
+> the majority of the edges unaffected, and so updating the entire graph
+> each round can be highly wasteful."
+
+N20_D1: at eps=0.08 that regime is false on this RAG (layer 0 merges
+1.32M of 1.85M). NSF "Star-Merge" (MST spines) is not this data structure.
+
+cuML 26.08 (`papers/fetched/cuml_agg_2608.html`):
+
+> linkage {“single”}, default=”single”
+
+2507.20047 contents (`papers/fetched/bateni_2507.20047.pdf` / local txt):
+
+> "2.3 Parallel HAC for Low-Height Dendrograms"
+
+That is Ward/centroid in R^k, not ParHAC clustered-graph StarMerge.
+
+Chamfer (`papers/fetched/chamfer_2602.10444.pdf`):
+
+> "Observation 1. None of the variants of Chamfer-linkage satisfy
+> reducibility."
+
+GPU-UPGMA 2015 (`papers/fetched/gpu_upgma_wayback.pdf`):
+
+> "the number of OTUs is N, which ranges from 1000 to 10,000"
+
+GSHAC abstract (`papers/fetched/gshac_2604.11656.pdf`): exact HAC via
+sparse geographic graph + fastcluster on a workstation. Serial class.
+
+Šmelko CUNI thesis abstract: "GPU-accelerated version of the
+Mahalanobis-average linked hierarchical clustering" on mass cytometry.
+Not a drop-in on `rag.npz`.
+
+### No unused GPU contact-mean HAC
+
+arXiv query `all:"average linkage" AND (all:GPU OR all:CUDA)` = 0 hits
+at 2026-09-11T14:37Z (parser). `ParHAC AND GPU` still 0 (S42, rechecked
+via local PDFs). Remaining agg win vs 1679.9 ms is engineering of the
+existing (1+eps) matching + S3 contract (owner map hash_rewrite 287 +
+rebuild 278 + dirty_fuse 273 + hash_insert 174 + emit_holes 161 =
+1173 ms; optimistic floor ~840 ms if those go to 0). Not a new
+algorithm class.
+
+N20_STAR CUDA rewrite: **do not**. GPU RNN: skeleton only
+(`csrc/n20_rnn_gpu_prep.cu`); do not launch.
+
+

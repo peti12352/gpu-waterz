@@ -90,6 +90,14 @@ static float g_n11_tile_ms = 0;
 static float g_n11_stitch_ms = 0;
 static int64_t g_n11_nrep_last = 0;
 static int64_t g_n11_ncross_last = 0;
+enum { N21_HOP_CAP = 64 };
+static int g_n21_hop_n = 0;
+static int g_n21_hop_nlist[N21_HOP_CAP];
+static double g_n21_hop_mean[N21_HOP_CAP];
+static double g_n21_hop_root_frac[N21_HOP_CAP];
+static unsigned int g_n21_hop_maxv[N21_HOP_CAP];
+static char g_n21_hop_site[N21_HOP_CAP][16];
+static unsigned long long* g_n21_dctr = nullptr;
 
 static bool host_park_on() {
     const char* s = std::getenv("WATERZ_HOST_PARK");
@@ -111,6 +119,29 @@ static bool list_halving() {
     static int cached = -1;
     if (cached < 0) {
         const char* s = std::getenv("WATERZ_LIST_HALVING");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N21 W2: J pointer jumps inside k_w5_compress_list only. Not k_uf_jump
+// over nvox (that is JUMP_FLATTEN). Default 0.
+static int list_jump_j() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_LIST_JUMP");
+        int v = (s && *s) ? std::atoi(s) : 0;
+        if (v < 0) v = 0;
+        if (v > 8) v = 8;
+        cached = v;
+    }
+    return cached;
+}
+
+static bool n21_hops_on() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_N21_HOPS");
         cached = (s && std::atoi(s) != 0) ? 1 : 0;
     }
     return cached != 0;
@@ -275,6 +306,7 @@ extern "C" void ws_n9_reset(void) {
     g_n11_stitch_ms = 0;
     g_n11_nrep_last = 0;
     g_n11_ncross_last = 0;
+    g_n21_hop_n = 0;
 }
 
 extern "C" void ws_n11_uf_stats(
@@ -311,6 +343,34 @@ extern "C" void ws_n9_stats(
     if (w5_ms) *w5_ms = g_n9_w5_ms;
     if (bfs_ms) *bfs_ms = g_n9_bfs_ms;
     if (bfs_calls) *bfs_calls = g_n9_bfs_calls;
+}
+
+extern "C" int ws_n21_hop_count(void) { return g_n21_hop_n; }
+
+extern "C" void ws_n21_hop_get(
+    int i, int* nlist, double* mean, double* root_frac, unsigned int* hmax,
+    char* site, int site_n)
+{
+    if (i < 0 || i >= g_n21_hop_n) {
+        if (nlist) *nlist = 0;
+        if (mean) *mean = 0;
+        if (root_frac) *root_frac = 0;
+        if (hmax) *hmax = 0;
+        if (site && site_n > 0) site[0] = 0;
+        return;
+    }
+    if (nlist) *nlist = g_n21_hop_nlist[i];
+    if (mean) *mean = g_n21_hop_mean[i];
+    if (root_frac) *root_frac = g_n21_hop_root_frac[i];
+    if (hmax) *hmax = g_n21_hop_maxv[i];
+    if (site && site_n > 0) {
+        int n = 0;
+        while (g_n21_hop_site[i][n] && n + 1 < site_n) {
+            site[n] = g_n21_hop_site[i][n];
+            ++n;
+        }
+        site[n] = 0;
+    }
 }
 
 extern "C" void ws_mem_reset(void) {
@@ -677,6 +737,36 @@ __device__ uint32_t uf_find_halve(uint32_t* p, uint32_t x) {
         x = nn;
     }
     return x;
+}
+
+// N21 W2: J unrolled parent hops then same compress as uf_find. List only.
+__device__ uint32_t uf_find_j(uint32_t* p, uint32_t x, int J) {
+    if (x == SENT) return SENT;
+    uint32_t r = x;
+    for (int k = 0; k < 4096; ++k) {
+        uint32_t n = p[r];
+        if (n == r || n == SENT) {
+            if (n == SENT) return SENT;
+            break;
+        }
+        for (int j = 1; j < J && n != SENT; ++j) {
+            const uint32_t nn = p[n];
+            if (nn == n || nn == SENT) {
+                n = (nn == SENT) ? SENT : n;
+                break;
+            }
+            n = nn;
+        }
+        if (n == SENT) return SENT;
+        r = n;
+    }
+    uint32_t y = x;
+    for (int k = 0; k < 4096 && y != r && y != SENT; ++k) {
+        uint32_t n = p[y];
+        p[y] = r;
+        y = n;
+    }
+    return r;
 }
 
 __device__ inline void uf_hook(uint32_t* p, uint32_t a, uint32_t b) {
@@ -1808,13 +1898,65 @@ __global__ void k_w5_hook_list(const uint8_t* bits, uint32_t* parent,
     }
 }
 
+__global__ void k_n21_probe_hops(
+    const uint32_t* p, const uint32_t* list, int nlist,
+    unsigned long long* hop_sum, unsigned long long* root_n,
+    unsigned int* hop_max)
+{
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= nlist) return;
+    uint32_t x = list[t];
+    int hops = 0;
+    for (int k = 0; k < 4096; ++k) {
+        if (x == SENT) break;
+        const uint32_t n = p[x];
+        if (n == x || n == SENT) break;
+        x = n;
+        hops++;
+    }
+    if (hops == 0) atomicAdd(root_n, 1ull);
+    atomicAdd(hop_sum, (unsigned long long)hops);
+    atomicMax(hop_max, (unsigned int)hops);
+}
+
+static void n21_probe_list(const uint32_t* parent, const uint32_t* list,
+                           int nlist, int threads, const char* site)
+{
+    if (!n21_hops_on() || nlist <= 0 || g_n21_hop_n >= N21_HOP_CAP) return;
+    if (!g_n21_dctr) cudaMalloc(&g_n21_dctr, 24);
+    cudaMemset(g_n21_dctr, 0, 24);
+    const int lb = (nlist + threads - 1) / threads;
+    k_n21_probe_hops<<<lb, threads>>>(
+        parent, list, nlist,
+        g_n21_dctr,
+        g_n21_dctr + 1,
+        (unsigned int*)(g_n21_dctr + 2));
+    unsigned long long h[3] = {0, 0, 0};
+    cudaMemcpy(h, g_n21_dctr, 24, cudaMemcpyDeviceToHost);
+    const int i = g_n21_hop_n++;
+    g_n21_hop_nlist[i] = nlist;
+    g_n21_hop_mean[i] = nlist ? ((double)h[0] / (double)nlist) : 0.0;
+    g_n21_hop_root_frac[i] = nlist ? ((double)h[1] / (double)nlist) : 0.0;
+    g_n21_hop_maxv[i] = (unsigned int)h[2];
+    int n = 0;
+    while (site[n] && n < 15) {
+        g_n21_hop_site[i][n] = site[n];
+        ++n;
+    }
+    g_n21_hop_site[i][n] = 0;
+}
+
 __global__ void k_w5_compress_list(uint32_t* p, int* changed,
-                                   const uint32_t* list, int nlist, int halve) {
+                                   const uint32_t* list, int nlist,
+                                   int halve, int jumpj) {
     const int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= nlist) return;
     const uint32_t i = list[t];
     const uint32_t was = p[i];
-    const uint32_t now = halve ? uf_find_halve(p, i) : uf_find(p, i);
+    uint32_t now;
+    if (jumpj >= 2) now = uf_find_j(p, i, jumpj);
+    else if (halve) now = uf_find_halve(p, i);
+    else now = uf_find(p, i);
     p[i] = now;
     if (now != was) atomicExch(changed, 1);
 }
@@ -2442,8 +2584,10 @@ static int w5_union_find(const uint8_t* bits_d, uint32_t* parent,
         k_w5_hook_list<Recip><<<lb, threads>>>(
             bits_d, parent, changed, list, nlist, Z, Y, X, find_r);
         if (!hook_root()) {
+            n21_probe_list(parent, list, nlist, threads, "hook");
             k_w5_compress_list<<<lb, threads>>>(
-                parent, changed, list, nlist, list_halving() ? 1 : 0);
+                parent, changed, list, nlist, list_halving() ? 1 : 0,
+                list_jump_j());
         }
         int h = 0;
         if (pin_host) {
@@ -2457,8 +2601,10 @@ static int w5_union_find(const uint8_t* bits_d, uint32_t* parent,
     }
     if (hook_root() && nlist > 0) {
         cudaMemset(changed, 0, 4);
+        n21_probe_list(parent, list, nlist, threads, "hook_root");
         k_w5_compress_list<<<lb, threads>>>(
-            parent, changed, list, nlist, list_halving() ? 1 : 0);
+            parent, changed, list, nlist, list_halving() ? 1 : 0,
+            list_jump_j());
     }
     const bool skip_c = fold_flatten() && (!fold_e9b_only() || Recip);
     if (jump_flatten()) {
@@ -2670,8 +2816,10 @@ static int w5_e4_union_find(const uint8_t* bits_d, uint32_t* parent,
         for (int r = 0; r < cap && npair > 0; ++r) {
             cudaMemset(changed, 0, 4);
             k_e4_hook_pairs<<<eb, threads>>>(parent, changed, eu_u, ev_u, npair);
+            n21_probe_list(parent, reps, nrep, threads, "e4");
             k_w5_compress_list<<<rb, threads>>>(
-                parent, changed, reps, nrep, list_halving() ? 1 : 0);
+                parent, changed, reps, nrep, list_halving() ? 1 : 0,
+                list_jump_j());
             int h = 0;
             cudaMemcpy(&h, changed, 4, cudaMemcpyDeviceToHost);
             ++rounds;

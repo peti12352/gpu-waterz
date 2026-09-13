@@ -5,8 +5,9 @@ GPU affinity-flow watershed + contact-mean agglomeration. Matches stock
 affinities; call it from numpy or torch CUDA tensors.
 
 Docs: [pipeline](docs/pipeline.md), [CUDA build](docs/build.md),
-[campaign atlas](notes/ATLAS.md), [VOI atlas CSV](data/cache/voi_atlas.csv),
-[open questions](notes/PROBLEM.md), [engineering note](docs/hn.md).
+[where we are](notes/WHERE_WE_ARE.md), [campaign atlas](notes/ATLAS.md),
+[VOI atlas CSV](data/cache/voi_atlas.csv), [open questions](notes/PROBLEM.md),
+[engineering note](docs/hn.md).
 
 ---
 
@@ -164,6 +165,8 @@ Idle RTX 5090, CUDA events, affinity in VRAM, mirror-tiled
 | end-to-end | ~3093 (~0.70 Gvox/s) |
 
 Four-threshold VOI: PASS. Labels byte-identical across two full runs.
+Where the campaign stands (best pin, remaining paths, closed doors with
+proof): [notes/WHERE_WE_ARE.md](notes/WHERE_WE_ARE.md).
 Campaign report: [notes/ATLAS.md](notes/ATLAS.md).
 
 ```
@@ -177,6 +180,8 @@ python src/segment.py cremiA_val/affinity.h5 --out-dir . --thresholds 0.2 0.3 0.
 2. (1+eps) contact-mean ParHAC cleared the four-T VOI gate; eps boundary near 0.40 on aff-0.3.
 3. Timing must exclude host parking of affinity/corners.
 4. Plateau semantics matter more than BFS wall time.
+5. New merge classes and leftover kernel tricks did not move the 2.16 pin
+   ([WHERE_WE_ARE.md](notes/WHERE_WE_ARE.md)).
 
 Open questions: [notes/PROBLEM.md](notes/PROBLEM.md).
 

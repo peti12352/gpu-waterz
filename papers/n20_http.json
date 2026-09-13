@@ -1,0 +1,219 @@
+[
+  {
+    "file": "pandora_2401.06089.pdf",
+    "url": "https://arxiv.org/pdf/2401.06089",
+    "http": 200,
+    "bytes": 1961485,
+    "kind": "ok"
+  },
+  {
+    "file": "chamfer_2602.10444.pdf",
+    "url": "https://arxiv.org/pdf/2602.10444",
+    "http": 200,
+    "bytes": 1455273,
+    "kind": "ok"
+  },
+  {
+    "file": "centroid_2406.05066.pdf",
+    "url": "https://arxiv.org/pdf/2406.05066",
+    "http": 200,
+    "bytes": 2413222,
+    "kind": "ok"
+  },
+  {
+    "file": "dyn_sld_2506.18384.pdf",
+    "url": "https://arxiv.org/pdf/2506.18384",
+    "http": 200,
+    "bytes": 1042999,
+    "kind": "ok"
+  },
+  {
+    "file": "gshac_2604.11656.pdf",
+    "url": "https://arxiv.org/pdf/2604.11656",
+    "http": 200,
+    "bytes": 1211025,
+    "kind": "ok"
+  },
+  {
+    "file": "pcbs_2411.10290.pdf",
+    "url": "https://arxiv.org/pdf/2411.10290",
+    "http": 200,
+    "bytes": 1832046,
+    "kind": "ok"
+  },
+  {
+    "file": "parhac_2206.11654.pdf",
+    "url": "https://arxiv.org/pdf/2206.11654",
+    "http": 200,
+    "bytes": 1581721,
+    "kind": "ok"
+  },
+  {
+    "file": "cuml_agg_2608.html",
+    "url": "https://docs.nvidia.com/cuml/26.08/api/generated/cuml.cluster.AgglomerativeClustering/",
+    "http": 200,
+    "bytes": 64253,
+    "kind": "ok"
+  },
+  {
+    "file": "forum_24259.json",
+    "url": "https://forums.developer.nvidia.com/t/kernel-produces-only-sometimes-right-results-hierarchical-clustering-bachelor-thesis/24259.json",
+    "http": 200,
+    "bytes": 35914,
+    "kind": "ok"
+  },
+  {
+    "file": "forum_8876.json",
+    "url": "https://forums.developer.nvidia.com/t/minimal-spanning-tree-on-cuda/8876.json",
+    "http": 200,
+    "bytes": 27824,
+    "kind": "ok"
+  },
+  {
+    "file": "forum_191439.json",
+    "url": "https://forums.developer.nvidia.com/t/gpu-accelerated-hierarchical-dbscan-with-rapids-cuml-let-s-get-back-to-the-future/191439.json",
+    "http": 200,
+    "bytes": 23177,
+    "kind": "ok"
+  },
+  {
+    "file": "gpu_upgma_2015.pdf",
+    "url": "https://www.cs.nthu.edu.tw/~ychung/Journal/2015-CCPE.pdf",
+    "http": 403,
+    "bytes": 199,
+    "kind": "not_pdf"
+  },
+  {
+    "file": "bateni_2507.20047.pdf",
+    "url": "https://arxiv.org/pdf/2507.20047",
+    "http": 200,
+    "bytes": 2062077,
+    "kind": "ok"
+  },
+  {
+    "file": "parchain_2106.04727.pdf",
+    "url": "https://arxiv.org/pdf/2106.04727",
+    "http": 200,
+    "bytes": 1226087,
+    "kind": "ok"
+  },
+  {
+    "file": "cuslink_2306.16354.pdf",
+    "url": "https://arxiv.org/pdf/2306.16354",
+    "http": 200,
+    "bytes": 263648,
+    "kind": "ok"
+  },
+  {
+    "file": "gasp_1906.11713.pdf",
+    "url": "https://arxiv.org/pdf/1906.11713",
+    "http": 200,
+    "bytes": 5908444,
+    "kind": "ok"
+  },
+  {
+    "file": "mullner_1109.2378.pdf",
+    "url": "https://arxiv.org/pdf/1109.2378",
+    "http": 200,
+    "bytes": 557806,
+    "kind": "ok"
+  },
+  {
+    "file": "terahac_2308.03578.pdf",
+    "url": "https://arxiv.org/pdf/2308.03578",
+    "http": 200,
+    "bytes": 2165192,
+    "kind": "ok"
+  },
+  {
+    "file": "dynhac_2501.07745.pdf",
+    "url": "https://arxiv.org/pdf/2501.07745",
+    "http": 200,
+    "bytes": 1465076,
+    "kind": "ok"
+  },
+  {
+    "file": "hardhac_2404.14730.pdf",
+    "url": "https://arxiv.org/pdf/2404.14730",
+    "http": 200,
+    "bytes": 1927027,
+    "kind": "ok"
+  },
+  {
+    "file": "seqhac_2106.05610.pdf",
+    "url": "https://arxiv.org/pdf/2106.05610",
+    "http": 200,
+    "bytes": 900669,
+    "kind": "ok"
+  },
+  {
+    "file": "tseng_2205.04956.pdf",
+    "url": "https://arxiv.org/pdf/2205.04956",
+    "http": 200,
+    "bytes": 1223502,
+    "kind": "ok"
+  },
+  {
+    "file": "lu_2106.10795.pdf",
+    "url": "https://arxiv.org/pdf/2106.10795",
+    "http": 200,
+    "bytes": 4977857,
+    "kind": "ok"
+  },
+  {
+    "file": "gpu_upgma_wayback.pdf",
+    "url": "https://web.archive.org/web/2020/https://www.cs.nthu.edu.tw/~ychung/Journal/2015-CCPE.pdf",
+    "http": 200,
+    "bytes": 920197,
+    "kind": "ok"
+  },
+  {
+    "file": "unpaywall_cpe3355.json",
+    "url": "https://api.unpaywall.org/v2/10.1002/cpe.3355?email=research@example.com",
+    "http": 422,
+    "bytes": 154,
+    "kind": "ok"
+  },
+  {
+    "file": "smelko_cuni.html",
+    "url": "https://dspace.cuni.cz/handle/20.500.11956/119191?mode=full",
+    "http": 200,
+    "bytes": 33024,
+    "kind": "ok"
+  },
+  {
+    "file": "defays_clink.html",
+    "url": "https://doi.org/10.1093/comjnl/20.4.364",
+    "http": 403,
+    "bytes": 5661,
+    "kind": "ok"
+  },
+  {
+    "file": "ieee_chen_hpcc.html",
+    "url": "https://doi.org/10.1109/HPCC.2012.26",
+    "http": 202,
+    "bytes": 0,
+    "kind": "ok"
+  },
+  {
+    "file": "smelko_thesis.pdf",
+    "url": "https://dspace.cuni.cz/bitstream/handle/20.500.11956/119191/120362722.pdf?sequence=1&isAllowed=y",
+    "http": 200,
+    "bytes": 1494146,
+    "kind": "ok"
+  },
+  {
+    "file": "dang_pdp2014.html",
+    "url": "https://doi.org/10.1109/PDP.2014.18",
+    "http": 202,
+    "bytes": 0,
+    "kind": "not_obtained"
+  },
+  {
+    "file": "europar_smelko.html",
+    "url": "https://doi.org/10.1007/978-3-030-29400-7_1",
+    "http": 200,
+    "bytes": 3038,
+    "kind": "not_pdf"
+  }
+]

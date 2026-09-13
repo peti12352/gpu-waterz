@@ -170,7 +170,7 @@ Owner map (N19 force-export, [N19_I0_NSYS.md](N19_I0_NSYS.md) / `n19_owners.json
 | kernel | total_ms | % of kernel time | role |
 |---|---|---|---|
 | `k_w5_compress_list` | 508.0 | 18.5 | WS list-UF compress |
-| `:hash_rewrite` | 286.9 | 14.9 | ParHAC hash rewrite (438 launches) |
+| `:hash_rewrite` NVTX | 286.9 | wraps fuse | **not a fifth kernel** (N21_D0) |
 | `k_rebuild_active` | 278.4 | 10.1 | ParHAC rebuild (438) |
 | `k_rewrite_dirty_fuse` | 273.0 | 9.9 | dirty fuse (438) |
 | `k_hash_insert` | 173.6 | 6.3 | hash insert |
@@ -182,7 +182,9 @@ Owner map (N19 force-export, [N19_I0_NSYS.md](N19_I0_NSYS.md) / `n19_owners.json
 
 NVTX: `w5_stitch` 835 ms (range, not a single kernel), BFS/`k_indep_bfs` ~14 ms of 2.16 WS.
 
-Optimistic kill of compress_list->0 and hash+rebuild+rewrite->0: WS~800 + RAG 86 + agg~840 + extract 19 ~ **1745 ms**, still ~1.6x over 1080 **on the faster card**. That is why N19 W/H stop is not laziness.
+Optimistic kill of compress_list->0 and unique rebuild+fuse->0: leftover agg
+**~1128 ms** (N21_D0; old ~840 mixed NVTX). Plus insert+emit vanish -> **~794**.
+WS~800 + RAG 86 + agg~1128 + extract 19 still over 1080 **on the faster card**.
 
 ### 4. Error checklist (already paid for)
 
@@ -223,6 +225,22 @@ Seeded from N18 + N19 stamps. Do not reopen. Full JSONL: [n19_dead.jsonl](../dat
 | N19_X1 | no affinity-PRUF; grayscale S1 dead |
 | N19_X2 | GASP Average VOI FAIL |
 | N19_X3 | RAMA 60 s timeout |
+| N20_D1 / N20_STAR | StarMerge EV-dead (layer-0 71.3% of merges) |
+| N20_D2 | dendrogram height 12539; chain not a closer |
+| N20_D3 / N20_RNN | RNN cap=5000; four-T FAIL; no GPU NN-chain |
+| N20_X4 | complete-link under-merge |
+| N20_X5 | WPGMA under-merge |
+| N20_LU2 | four-T PASS, residual ~3.86M, 6645 s, no_speed_path |
+| N20_GPU_PREP | inventory only; ran_gpu=false |
+| N21_A1 | identity+four PASS; val cut 35 ms noise |
+| N21_A2 / N21_A4 | identity+four PASS; val cut 51/54 ms; no 2.16 |
+| N21_W1 | D0 no-go compress-subset |
+| N21_W2 | ident+four PASS; val WS -6 ms |
+| N21_W3 / N21_WS_FAT_LIST_STRUCTURAL | freeze WS; nlist 71-105M |
+| N21_A3 | ntab already sized |
+
+N20 stamps: [n20_dead.jsonl](../data/cache/n20_dead.jsonl). Do not rewrite n19_dead IDs.
+N21 stamps: [n21_dead.jsonl](../data/cache/n21_dead.jsonl). Cite [N21_WIN.md](N21_WIN.md).
 
 ---
 
@@ -244,7 +262,7 @@ eps=0.08 four-T / eps=0.40 T=0.3 is an empirical phase boundary, not a hyperpara
 
 ### Finding 4  -  Type A applied (not proved here): exact MEAN will not close the bounty
 
-Abboud/ParHAC theorems already say exact average-linkage has no poly-log parallel algorithm under standard assumptions (SOURCES S17, S29). N19 H1-H4 are the engineering corroboration: bin-ladder slower+VOI-fail; NNG changes merge order; simplified Lu freeze != dendrogram; RNN not even implemented. Scope: this does **not** prove 2 Gvox/s is impossible  -  TASK allows approximate order. It proves **exact-heap GPU** is the wrong closer.
+Abboud/ParHAC theorems already say exact average-linkage has no poly-log parallel algorithm under standard assumptions (SOURCES S17, S29). N19 H1-H4 are the engineering corroboration: bin-ladder slower+VOI-fail; NNG changes merge order; simplified Lu freeze != dendrogram; RNN not even implemented (N20 later implemented S3 RNN; height 12539 and cap 5000 still kill it as a closer). Scope: this does **not** prove 2 Gvox/s is impossible  -  TASK allows approximate order. It proves **exact-heap GPU** is the wrong closer.
 
 ### Finding 5  -  Type E: plateau grouping, not BFS, owns watershed
 
@@ -257,6 +275,38 @@ Measured: WS fused pred ~42 GiB at 2.16; after lifetime cuts + z-slab, legal sta
 ### Finding 7  -  Methodology (reusable lab infrastructure)
 
 `voi_only` vs `ident`; four-T before 2.16; owner >=200 ms; `n19_dead.jsonl`; `card_busy` refuse; subprocess-per-env; abort stamps; claim string "not a 2 Gvox/s number; not 3090 Ti". This is how the negative results stayed honest.
+
+### Finding 8  -  Type C/D: N20 closed unused mean-HAC classes (2026-09-12)
+
+Parser table S43: no unused GPU mean-HAC replaces contact-mean ParHAC under
+four-T VOI. Measured on greengoblin, idle CPU, no GPU kernels:
+
+- StarMerge is not in the paper small-merge regime at production eps (N20_D1).
+- Exact S3 dendrogram height is 12539 (N20_D2); Abboud O(m h log n) is not a
+  1680 ms closer. P0i sample height 9 was not the full RAG.
+- S3 RNN hit cap 5000 on every T (N20_D3); parents != heap; four-T FAIL
+  (N20_RNN). GPU NN-chain stays unlaunched.
+- Complete-link and WPGMA under-merge (N20_X4, N20_X5).
+- Spatial Lu Alg 2 four-T PASSes but residual is ~3.86M of 7.5M edges and
+  6645 s CPU (N20_LU2). Oracle is the heap, not ParHAC.
+
+Remaining agg win is engineering of existing (1+eps) matching + S3 contract.
+N21 listed insert/rebuild: identity+four PASS, val cuts 35-54 ms, no 2.16.
+Optimistic leftover if rebuild+fuse vanish is **~1128 ms**, not ~840
+(NVTX double count). Cite [N21_WIN.md](N21_WIN.md).
+
+
+### Finding 9  -  Type E: listed domain does not delete dense rewrite or fat lists
+
+D0: median ndirty/nscan=0.018 and nact/nscan=0.003, so listed insert/rebuild
+were legal. Early inners are not sparse (ndirty/nscan=0.75). A1/A2/A4
+identity+four PASS; cold val cuts 35-54 ms; no 2.16 (gate 100 ms). N22
+occupied-slot emit was the N21_A3 miss (nsys avg/med 8.7x, first inner
+empty_frac=0.735); identity+four PASS, 18 ms solo / 62 ms stacked, insert
+atomicAdd tax ate the ntab skip. Rewrite stays O(nscan) because holes are
+its output; first inner ndirty 5.6M vs nact 2.8M needs CSR (do not CONT
+E6t). Compress 508 ms is 71-105M list entries with hop_max=9; J-jump was
+-6 ms. Cite [N21_WIN.md](N21_WIN.md) and [N22_WIN.md](N22_WIN.md).
 
 One-command four-T + identity diagnostic (no 2.16):
 
@@ -277,8 +327,18 @@ Official shipped grader (writes `mine_thr*.h5`): `scripts/eval.sh` / `scripts/le
 
 ## Part III  -  Honest ceiling and what not to grind
 
-Best e2e **~0.70 Gvox/s on a 5090**. WS floor ~1310 ms > 1080 ms TASK budget. Remaining owners (compress_list 508 + hash/rebuild/rewrite ~838) do not arithmetic to TASK even if zeroed. Track C script refuses unless the card is a real 3090 Ti.
+Best e2e **~0.70 Gvox/s on a 5090**. WS floor ~1310 ms > 1080 ms TASK budget.
+Unique remaining owners: compress_list 508 (fat list, hop_max=9) + rewrite 273
+(still dense) + emit 161 (occupied list identity-true, not a closer). Listed
+rebuild/insert/slot-emit do not default. Track C script refuses unless the
+card is a real 3090 Ti.
 
-Do not: N20 micro-opt on hook/vcount/sort; another eps grid; claiming 2 Gvox/s from 5090 arithmetic; grinding compress_list without a four-T identity plan; an academic paper that only says "we almost hit a bounty."
+Do not: N20/N21/N22 micro-opt on hook/vcount/sort/copy_sz; another eps grid;
+claiming 2 Gvox/s from 5090 arithmetic; grinding compress_list without
+shrinking nlist under identity; rewrite StarMerge; launch
+`n20_rnn_gpu_prep.cu`; reopen n19_dead IDs; default listed/slot-emit kernels;
+2.16 on val cut <100 ms; CUB DeviceSelect over ntab as an emit closer.
 
-Do: cite the atlas; state the remaining problem in [PROBLEM.md](PROBLEM.md); run Track C if a 3090 Ti appears.
+Do: cite the atlas, [N21_WIN.md](N21_WIN.md), and [N22_WIN.md](N22_WIN.md);
+state the remaining problem in [PROBLEM.md](PROBLEM.md); run Track C if a
+3090 Ti appears.

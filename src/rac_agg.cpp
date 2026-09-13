@@ -3944,3 +3944,303 @@ extern "C" int nn_chain_s3_cpu(
     }
     return 1;
 }
+
+// --- N20: S3 / complete / WPGMA heap + true RNN + paper Lu Alg 2 ---
+// linkage 0 = contact-mean S3, 1 = complete (min mean), 2 = WPGMA 1/2+1/2
+static void n20_apply_link(Edge& keep, const Edge& e, int linkage) {
+    double m1 = keep.n > 0 ? keep.sum / (double)keep.n : 0.0;
+    double m2 = e.n > 0 ? e.sum / (double)e.n : 0.0;
+    if (linkage == 1) {
+        if (m2 < m1) {
+            keep.sum = e.sum;
+            keep.n = e.n;
+        }
+        keep.score = 1.0 - keep.sum / (double)keep.n;
+        return;
+    }
+    if (linkage == 2) {
+        double m = 0.5 * (m1 + m2);
+        keep.n = 1;
+        keep.sum = m;
+        keep.score = 1.0 - m;
+        return;
+    }
+    keep.sum += e.sum;
+    keep.n += e.n;
+    keep.score = 1.0 - keep.sum / (double)keep.n;
+}
+
+static bool n20_unite_link(Graph& g, uint32_t a, uint32_t b, int linkage) {
+    a = g.find(a);
+    b = g.find(b);
+    if (a == b) return false;
+    if (a > b) std::swap(a, b);
+    for (int eid : g.adj[b]) {
+        Edge& e = g.edges[(size_t)eid];
+        if (!e.alive) continue;
+        uint32_t other = (e.u == b) ? e.v : e.u;
+        other = g.find(other);
+        g.lookup.erase(pair_key(e.u, e.v));
+        if (other == a) {
+            e.alive = false;
+            continue;
+        }
+        uint32_t lo = a < other ? a : other;
+        uint32_t hi = a < other ? other : a;
+        auto it = g.lookup.find(pair_key(lo, hi));
+        if (it == g.lookup.end()) {
+            e.u = lo;
+            e.v = hi;
+            e.score = 1.0 - e.sum / (double)e.n;
+            g.adj[a].push_back(eid);
+            g.lookup[pair_key(lo, hi)] = eid;
+        } else {
+            Edge& keep = g.edges[(size_t)it->second];
+            n20_apply_link(keep, e, linkage);
+            e.alive = false;
+        }
+    }
+    g.adj[b].clear();
+    g.parent[b] = a;
+    return true;
+}
+
+struct N20HItem {
+    double score;
+    uint32_t lo, hi;
+    int eid;
+    bool operator>(const N20HItem& o) const {
+        if (score != o.score) return score > o.score;
+        if (lo != o.lo) return lo > o.lo;
+        return hi > o.hi;
+    }
+};
+
+static int64_t n20_heap_loop(
+    Graph& g, double tscore, int linkage, const uint8_t* freeze,
+    std::vector<uint8_t>* F, int64_t* n_frozen_pops, std::vector<int>* hgt)
+{
+    std::priority_queue<N20HItem, std::vector<N20HItem>, std::greater<N20HItem>> heap;
+    auto push_e = [&](int eid) {
+        Edge& e = g.edges[(size_t)eid];
+        if (!e.alive || e.score >= tscore) return;
+        uint32_t fu = g.find(e.u), fv = g.find(e.v);
+        if (fu == fv) {
+            e.alive = false;
+            return;
+        }
+        if (fu > fv) std::swap(fu, fv);
+        heap.push({e.score, fu, fv, eid});
+    };
+    g.compact_live();
+    for (int eid : g.live) push_e(eid);
+    int64_t merges = 0, frozen_pops = 0;
+    int maxh = 0;
+    while (!heap.empty()) {
+        N20HItem h = heap.top();
+        heap.pop();
+        Edge& e = g.edges[(size_t)h.eid];
+        if (!e.alive || e.score >= tscore) continue;
+        uint32_t fu = g.find(e.u), fv = g.find(e.v);
+        if (fu == fv) {
+            e.alive = false;
+            continue;
+        }
+        if (fu > fv) std::swap(fu, fv);
+        if (e.score != h.score || fu != h.lo || fv != h.hi) {
+            heap.push({e.score, fu, fv, h.eid});
+            continue;
+        }
+        if (freeze && (freeze[fu] || freeze[fv])) {
+            if (F) {
+                (*F)[fu] = 1;
+                (*F)[fv] = 1;
+            }
+            ++frozen_pops;
+            continue;
+        }
+        if (!n20_unite_link(g, fu, fv, linkage)) continue;
+        ++merges;
+        uint32_t keep = g.find(fu);
+        if (hgt) {
+            int ha = (*hgt)[fu], hb = (*hgt)[fv];
+            int nh = 1 + (ha > hb ? ha : hb);
+            (*hgt)[keep] = nh;
+            if (nh > maxh) maxh = nh;
+        }
+        for (int eid : g.adj[keep]) push_e(eid);
+    }
+    if (n_frozen_pops) *n_frozen_pops = frozen_pops;
+    return merges;
+}
+
+extern "C" int n20_lw_heap_cpu(
+    const uint32_t* u_in,
+    const uint32_t* v_in,
+    const double* sum_in,
+    const int64_t* count_in,
+    int64_t n_edges,
+    const double* aff_thr,
+    int n_thr,
+    int linkage,
+    uint32_t* parent_out,
+    uint32_t max_id,
+    int64_t* stats_out)
+{
+    if (n_edges <= 0 || n_thr <= 0) return 0;
+    if (linkage < 0 || linkage > 2) return 0;
+    const uint32_t nnode = max_id + 1;
+    Graph g(nnode);
+    load_graph(g, u_in, v_in, sum_in, count_in, n_edges);
+    std::vector<int> order(n_thr);
+    for (int i = 0; i < n_thr; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(), [&](int a, int b) {
+        return aff_thr[a] > aff_thr[b];
+    });
+    // Persist dendrogram height across descending T so D2 reports the
+    // full tree height at each cut, not the per-band increment.
+    std::vector<int> hgt(nnode, 0);
+    for (int oi = 0; oi < n_thr; ++oi) {
+        int ti = order[oi];
+        const double tscore = 1.0 - aff_thr[ti];
+        auto t0 = std::chrono::steady_clock::now();
+        int64_t merges = n20_heap_loop(g, tscore, linkage, nullptr, nullptr,
+                                       nullptr, &hgt);
+        auto ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        int maxh = 0;
+        for (int h : hgt) if (h > maxh) maxh = h;
+        uint32_t* dst = parent_out + (size_t)ti * (size_t)nnode;
+        for (uint32_t i = 0; i < nnode; ++i) dst[i] = g.find(i);
+        if (stats_out) {
+            stats_out[ti * 3 + 0] = merges;
+            stats_out[ti * 3 + 1] = maxh;
+            stats_out[ti * 3 + 2] = (int64_t)ms;
+        }
+        std::fprintf(stderr,
+            "N20_LW link=%d T=%.2f merges=%lld height=%d ms=%.1f\n",
+            linkage, aff_thr[ti], (long long)merges, maxh, ms);
+        std::fflush(stderr);
+    }
+    return 1;
+}
+
+extern "C" int n20_rnn_s3_cpu(
+    const uint32_t* u_in,
+    const uint32_t* v_in,
+    const double* sum_in,
+    const int64_t* count_in,
+    int64_t n_edges,
+    const double* aff_thr,
+    int n_thr,
+    int64_t max_rounds,
+    uint32_t* parent_out,
+    uint32_t max_id,
+    int64_t* stats_out)
+{
+    if (n_edges <= 0 || n_thr <= 0) return 0;
+    if (max_rounds < 1) max_rounds = 5000;
+    const uint32_t nnode = max_id + 1;
+    Graph g(nnode);
+    load_graph(g, u_in, v_in, sum_in, count_in, n_edges);
+    std::vector<Best> best(nnode);
+    for (int ti = 0; ti < n_thr; ++ti) {
+        const double T = aff_thr[ti];
+        const double tscore = 1.0 - T;
+        Graph g2(nnode);
+        g2.edges = g.edges;
+        g2.adj = g.adj;
+        g2.lookup = g.lookup;
+        g2.live = g.live;
+        g2.parent = g.parent;
+        int64_t rounds = 0, nmerge = 0;
+        int hit_cap = 0;
+        while (rounds < max_rounds) {
+            g2.compact_live();
+            int64_t nr = 0, no = 0;
+            double sm = -1.0;
+            scan_best(g2, tscore, best, &nr, &no, &sm);
+            int merges = 0;
+            if (nr <= 0) break;
+            for (uint32_t i = 1; i < nnode; ++i) {
+                if (g2.parent[i] != i || !best[i].ok) continue;
+                uint32_t j = g2.find(best[i].nbr);
+                if (!best[j].ok || g2.find(best[j].nbr) != i) continue;
+                if (i < j && n20_unite_link(g2, i, j, 0)) ++merges;
+            }
+            nmerge += merges;
+            ++rounds;
+            if (merges == 0) break;
+        }
+        if (rounds >= max_rounds) hit_cap = 1;
+        uint32_t* dst = parent_out + (size_t)ti * (size_t)nnode;
+        for (uint32_t i = 0; i < nnode; ++i) dst[i] = g2.find(i);
+        if (stats_out) {
+            stats_out[ti * 3 + 0] = rounds;
+            stats_out[ti * 3 + 1] = nmerge;
+            stats_out[ti * 3 + 2] = hit_cap;
+        }
+        std::fprintf(stderr,
+            "N20_RNN T=%.2f rounds=%lld merges=%lld cap=%d\n",
+            T, (long long)rounds, (long long)nmerge, hit_cap);
+        std::fflush(stderr);
+    }
+    return 1;
+}
+
+extern "C" int n20_lu_alg2_cpu(
+    const uint32_t* u_in,
+    const uint32_t* v_in,
+    const double* sum_in,
+    const int64_t* count_in,
+    int64_t n_edges,
+    const uint8_t* boundary,
+    const double* aff_thr,
+    int n_thr,
+    uint32_t* parent_out,
+    uint32_t max_id,
+    int64_t* stats_out)
+{
+    if (n_edges <= 0 || n_thr <= 0 || !boundary) return 0;
+    const uint32_t nnode = max_id + 1;
+    for (int ti = 0; ti < n_thr; ++ti) {
+        Graph g(nnode);
+        load_graph(g, u_in, v_in, sum_in, count_in, n_edges);
+        const double tscore = 1.0 - aff_thr[ti];
+        std::vector<uint8_t> F(nnode, 0);
+        for (uint32_t i = 0; i < nnode; ++i) F[i] = boundary[i] ? 1 : 0;
+        int64_t frozen_pops = 0;
+        int64_t merges = n20_heap_loop(g, tscore, 0, F.data(), &F,
+                                       &frozen_pops, nullptr);
+        Graph gres(nnode);
+        gres.parent = g.parent;
+        int64_t nres = 0;
+        g.compact_live();
+        for (int eid : g.live) {
+            Edge& e = g.edges[(size_t)eid];
+            if (!e.alive) continue;
+            uint32_t fu = g.find(e.u), fv = g.find(e.v);
+            if (fu == fv || fu == 0 || fv == 0) continue;
+            if (!(F[fu] || F[fv])) continue;
+            gres.add_edge(fu, fv, e.sum, e.n);
+            ++nres;
+        }
+        int64_t mres = n20_heap_loop(gres, tscore, 0, nullptr, nullptr,
+                                    nullptr, nullptr);
+        for (uint32_t i = 0; i < nnode; ++i) g.parent[i] = gres.find(i);
+        uint32_t* dst = parent_out + (size_t)ti * (size_t)nnode;
+        for (uint32_t i = 0; i < nnode; ++i) dst[i] = g.find(i);
+        if (stats_out) {
+            stats_out[ti * 3 + 0] = merges;
+            stats_out[ti * 3 + 1] = frozen_pops;
+            stats_out[ti * 3 + 2] = nres;
+        }
+        std::fprintf(stderr,
+            "N20_LU2 T=%.2f interior_merges=%lld frozen_pops=%lld nres=%lld mres=%lld\n",
+            aff_thr[ti], (long long)merges, (long long)frozen_pops,
+            (long long)nres, (long long)mres);
+        std::fflush(stderr);
+        (void)mres;
+    }
+    return 1;
+}

@@ -110,6 +110,67 @@ extern "C" void agg_n9_dirty(
     if (dirty_u_max) *dirty_u_max = g_n9_dirty_u_max;
 }
 
+enum { N21_INNER_CAP = 8192 };
+static int g_n21_n = 0;
+static int g_n21_nscan[N21_INNER_CAP];
+static int g_n21_nlive[N21_INNER_CAP];
+static int g_n21_ndirty[N21_INNER_CAP];
+static int g_n21_nuniq[N21_INNER_CAP];
+static int g_n21_nact[N21_INNER_CAP];
+static int g_n21_ntab[N21_INNER_CAP];
+static int g_n21_last_ndirty = 0;
+static int g_n21_last_nuniq = 0;
+static int g_n21_last_ntab = 0;
+
+static void n21_note_combine(int ndirty, int nuniq, int ntab)
+{
+    g_n21_last_ndirty = ndirty;
+    g_n21_last_nuniq = nuniq;
+    g_n21_last_ntab = ntab;
+}
+
+static void n21_inner_push(int nscan, int nlive, int nact)
+{
+    if (g_n21_n >= N21_INNER_CAP) return;
+    const int i = g_n21_n++;
+    g_n21_nscan[i] = nscan;
+    g_n21_nlive[i] = nlive;
+    g_n21_ndirty[i] = g_n21_last_ndirty;
+    g_n21_nuniq[i] = g_n21_last_nuniq;
+    g_n21_nact[i] = nact;
+    g_n21_ntab[i] = g_n21_last_ntab;
+}
+
+extern "C" void agg_n21_reset(void)
+{
+    g_n21_n = 0;
+    g_n21_last_ndirty = 0;
+    g_n21_last_nuniq = 0;
+    g_n21_last_ntab = 0;
+}
+
+extern "C" int agg_n21_count(void) { return g_n21_n; }
+
+extern "C" void agg_n21_get(
+    int i, int* nscan, int* nlive, int* ndirty, int* nuniq, int* nact, int* ntab)
+{
+    if (i < 0 || i >= g_n21_n) {
+        if (nscan) *nscan = 0;
+        if (nlive) *nlive = 0;
+        if (ndirty) *ndirty = 0;
+        if (nuniq) *nuniq = 0;
+        if (nact) *nact = 0;
+        if (ntab) *ntab = 0;
+        return;
+    }
+    if (nscan) *nscan = g_n21_nscan[i];
+    if (nlive) *nlive = g_n21_nlive[i];
+    if (ndirty) *ndirty = g_n21_ndirty[i];
+    if (nuniq) *nuniq = g_n21_nuniq[i];
+    if (nact) *nact = g_n21_nact[i];
+    if (ntab) *ntab = g_n21_ntab[i];
+}
+
 extern "C" void agg_mem_reset(void) {
     g_agg_peak = g_agg_cur;
     agg_peak_lines().clear();
@@ -844,7 +905,7 @@ __global__ void k_rewrite_dirty(
 __global__ void k_rewrite_dirty_fuse(
     uint32_t* u, uint32_t* v, int64_t* ct, const uint32_t* parent,
     const uint8_t* dirty, int64_t n, uint8_t* keep,
-    uint32_t* holes, int* nhole, int* nself)
+    uint32_t* holes, int* nhole, int* nself, uint8_t* amask)
 {
     int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
     if (i >= n) return;
@@ -856,6 +917,7 @@ __global__ void k_rewrite_dirty_fuse(
     b = dfind_nocomp(parent, b);
     if (a == b || a == 0 || b == 0) {
         ct[i] = 0;
+        if (amask) amask[i] = 0;
         if (nself) atomicAdd(nself, 1);
         return;
     }
@@ -984,6 +1046,57 @@ __global__ void k_pack_amask(const uint8_t* amask, const int64_t* ct,
     if (i >= n || !amask[i] || ct[i] < 1) return;
     int s = atomicAdd(nact, 1);
     alist[s] = (uint32_t)i;
+}
+
+// N21 A2: listed rebuild. keep is a packed-this-inner flag (0/1), not the
+// rewrite keep bit — caller zeros it on old alist ∪ emit holes first.
+__global__ void k_keep_zero_listed(const uint32_t* idx, int n, uint8_t* keep)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    keep[idx[t]] = 0;
+}
+
+__global__ void k_retest_holes(
+    const uint32_t* holes, int nfill,
+    const double* sm, const int64_t* ct, double TL, uint8_t* amask)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= nfill) return;
+    const uint32_t i = holes[j];
+    if (ct[i] < 1) {
+        amask[i] = 0;
+        return;
+    }
+    amask[i] = (sm[i] / (double)ct[i] >= TL) ? 1 : 0;
+}
+
+__global__ void k_pack_listed(
+    const uint32_t* src, int nsrc,
+    const uint8_t* amask, const int64_t* ct, uint8_t* keep,
+    uint32_t* dst, int* nact)
+{
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= nsrc) return;
+    const uint32_t i = src[t];
+    if (!amask[i] || ct[i] < 1) return;
+    int s = atomicAdd(nact, 1);
+    dst[s] = i;
+    keep[i] = 1;
+}
+
+__global__ void k_pack_listed_new(
+    const uint32_t* holes, int nfill,
+    const uint8_t* amask, const int64_t* ct, uint8_t* keep,
+    uint32_t* dst, int* nact)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= nfill) return;
+    const uint32_t i = holes[j];
+    if (!amask[i] || ct[i] < 1 || keep[i]) return;
+    int s = atomicAdd(nact, 1);
+    dst[s] = i;
+    keep[i] = 1;
 }
 
 __global__ void k_rebuild_pack(
@@ -1738,7 +1851,8 @@ __global__ void k_hash_clear(HSlot* tab, int n)
 
 __global__ void k_hash_insert(
     const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
-    const uint8_t* keep, int64_t n, HSlot* tab, int ntab, int* ovf)
+    const uint8_t* keep, int64_t n, HSlot* tab, int ntab, int* ovf,
+    uint32_t* slots, int* nslots)
 {
     int64_t i = blockIdx.x * (int64_t)blockDim.x + threadIdx.x;
     if (i >= n || !keep[i] || ct[i] < 1) return;
@@ -1750,18 +1864,9 @@ __global__ void k_hash_insert(
         b = t;
     }
     unsigned long long key = edge_key(a, b);
-    // Avalanche before masking. The previous form was
-    //     h = key * 0x9E3779B97F4A7C15; slot = h & mask
-    // which is wrong in a way that quietly loses edges: in a multiplicative
-    // hash the low k bits of the product depend only on the low k bits of the
-    // input, and here those are v alone. Every edge sharing an endpoint v
-    // therefore landed in one cluster, blew past the 128-probe bound, and was
-    // dropped. Mixing to full avalanche first makes the masked low bits usable.
     unsigned long long h = hmix64(key);
     int mask = ntab - 1;
     int slot = (int)(h & (unsigned long long)mask);
-    // sm is integral here but arrives as a double, so a value already past the
-    // uint32 range would truncate on the cast rather than on the add.
     const double smd = sm[i];
     const int64_t cti = ct[i];
     const hsm_t adds = (hsm_t)smd;
@@ -1770,8 +1875,10 @@ __global__ void k_hash_insert(
         int idx = (slot + s) & mask;
         unsigned long long old = atomicCAS(&tab[idx].key, 0ull, key);
         if (old == 0 || old == key) {
-            // atomicAdd returns the pre-add value, so wraparound is detectable
-            // without a second read and without serialising the update.
+            if (old == 0 && slots && nslots) {
+                int si = atomicAdd(nslots, 1);
+                if (si >= 0 && si < ntab) slots[si] = (uint32_t)idx;
+            }
             const hsm_t olds = atomicAdd(&tab[idx].sm, adds);
             const hct_t oldc = atomicAdd(&tab[idx].ct, addc);
             if (ovf && hslot_would_wrap(olds, adds, oldc, addc, smd, cti))
@@ -1779,15 +1886,13 @@ __global__ void k_hash_insert(
             return;
         }
     }
-    // Falling out of the probe loop would drop the edge silently, which is a
-    // wrong answer rather than a slow one. The table is kept at load factor
-    // <= 0.5 so this should never fire, and the caller checks the flag.
     if (ovf) atomicOr(ovf, HOVF_PROBE);
 }
 
 static inline __device__ void hslot_insert(
     HSlot* tab, int ntab, unsigned long long key,
-    hsm_t adds, hct_t addc, double smd, int64_t cti, int* ovf)
+    hsm_t adds, hct_t addc, double smd, int64_t cti, int* ovf,
+    uint32_t* slots = nullptr, int* nslots = nullptr)
 {
     unsigned long long h = hmix64(key);
     int mask = ntab - 1;
@@ -1796,6 +1901,10 @@ static inline __device__ void hslot_insert(
         int idx = (slot + s) & mask;
         unsigned long long old = atomicCAS(&tab[idx].key, 0ull, key);
         if (old == 0 || old == key) {
+            if (old == 0 && slots && nslots) {
+                int si = atomicAdd(nslots, 1);
+                if (si >= 0 && si < ntab) slots[si] = (uint32_t)idx;
+            }
             const hsm_t olds = atomicAdd(&tab[idx].sm, adds);
             const hct_t oldc = atomicAdd(&tab[idx].ct, addc);
             if (ovf && hslot_would_wrap(olds, adds, oldc, addc, smd, cti))
@@ -1804,6 +1913,31 @@ static inline __device__ void hslot_insert(
         }
     }
     if (ovf) atomicOr(ovf, HOVF_PROBE);
+}
+
+// N21 A1: same CAS insert as k_hash_insert, grid over holes[0:ndirty]
+// (keep-survivors from k_rewrite_dirty_fuse). Not HASH_INSERT_ONLY.
+// Not k_hash_insert_dirty (n8: 1.31x slower).
+__global__ void k_hash_insert_listed(
+    const uint32_t* holes, int ndirty,
+    const uint32_t* u, const uint32_t* v, const double* sm, const int64_t* ct,
+    HSlot* tab, int ntab, int* ovf, uint32_t* slots, int* nslots)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= ndirty) return;
+    const int64_t i = (int64_t)holes[j];
+    if (ct[i] < 1) return;
+    uint32_t a = u[i], b = v[i];
+    if (a == 0 || b == 0 || a == b) return;
+    if (a > b) {
+        uint32_t t = a;
+        a = b;
+        b = t;
+    }
+    const double smd = sm[i];
+    const int64_t cti = ct[i];
+    hslot_insert(tab, ntab, edge_key(a, b), (hsm_t)smd, (hct_t)cti, smd, cti,
+                 ovf, slots, nslots);
 }
 
 // Dirty-path insert: warp-aggregate equal keys (C1), then a 512-slot
@@ -1903,6 +2037,11 @@ __global__ void k_hash_count(const HSlot* tab, int ntab, int* nout)
 // bandwidth-bound. This pass already has to read every slot, so emptying the
 // occupied ones here replaces that with a store on the occupied slots alone.
 //
+// N22 records those occupied indices at insert CAS-win (WATERZ_SLOT_EMIT)
+// so emit need not read empty slots. The invariant is the same: key == 0
+// implies sm and ct are untouched zeros. Zeroing every occupied slot leaves
+// the whole table clean, including the tail above a later, smaller ntab_use.
+//
 // The invariant it maintains: k_hash_insert only writes a slot after a CAS that
 // set its key, so key == 0 implies sm and ct are untouched zeros. Zeroing every
 // slot whose key is set therefore leaves the whole table clean, including the
@@ -1957,13 +2096,48 @@ __global__ void k_hash_emit_holes(
     ct[d] = (int64_t)c;
 }
 
+// N22 A3: same emit as k_hash_emit_holes, grid over occupied table indices
+// recorded at CAS-win in insert. Empty slots stay 0 from alloc / previous
+// emit. Do not resurrect k_hash_clear. Default off (WATERZ_SLOT_EMIT).
+__global__ void k_hash_emit_slots(
+    HSlot* tab, int ntab, const uint32_t* slots, int nslot,
+    const uint32_t* holes, int nhole,
+    uint32_t* u, uint32_t* v, double* sm, int64_t* ct,
+    int* nout, int* ovf)
+{
+    int j = blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= nslot) return;
+    const uint32_t i = slots[j];
+    if ((int)i >= ntab) return;
+    const unsigned long long key = tab[i].key;
+    if (key == 0) return;
+    const hsm_t s = tab[i].sm;
+    const hct_t c = tab[i].ct;
+    tab[i].key = 0;
+    tab[i].sm = 0;
+    tab[i].ct = 0;
+    if (c == 0) return;
+    int slot = atomicAdd(nout, 1);
+    if (slot >= nhole) {
+        if (ovf) atomicExch(ovf, 1);
+        return;
+    }
+    const uint32_t d = holes[slot];
+    u[d] = (uint32_t)(key >> 32);
+    v[d] = (uint32_t)(key & 0xffffffffull);
+    sm[d] = (double)s;
+    ct[d] = (int64_t)c;
+}
+
 __global__ void k_zero_hole_tail(
-    const uint32_t* holes, int m, int nhole, int64_t* ct)
+    const uint32_t* holes, int m, int nhole, int64_t* ct, uint8_t* amask)
 {
     int j = blockIdx.x * blockDim.x + threadIdx.x;
     const int src = m + j;
     if (src >= nhole) return;
-    ct[holes[src]] = 0;
+    const uint32_t i = holes[src];
+    ct[i] = 0;
+    if (amask) amask[i] = 0;
 }
 
 __global__ void k_freeze(uint32_t* parent, uint32_t* sz, const uint32_t* sz0,
@@ -2081,7 +2255,7 @@ static int hash_combine_live(
     // No clear pass: k_hash_emit leaves the table empty, and the caller clears
     // it once after allocation.
     k_hash_insert<<<be, threads>>>(
-        du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf);
+        du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf, nullptr, nullptr);
     cudaMemset(dnout, 0, 4);
     k_hash_emit<<<tb, threads>>>(dtab, ntab_use, tu, tv, tsm, tct, dnout);
     int m = 0;
@@ -2155,6 +2329,39 @@ static bool emit_holes() {
     return cached != 0;
 }
 
+// N22 A3: emit occupied hash slots from an insert-time index list instead of
+// scanning ntab. Requires EMIT_HOLES. Default off.
+static bool slot_emit() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_SLOT_EMIT");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0 && emit_holes();
+}
+
+// N21 A1: insert over holes[0:ndirty] instead of dense nscan. Default off.
+static bool listed_insert() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_LISTED_INSERT");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0;
+}
+
+// N21 A2: rebuild/pack from old alist ∪ emit holes. Default off.
+// Requires fuse + EMIT_HOLES so holes are keep-survivors and vacated
+// self-loops can drop amask in k_rewrite_dirty_fuse. Not FUSE_PACK.
+static bool listed_rebuild() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* s = std::getenv("WATERZ_LISTED_REBUILD");
+        cached = (s && std::atoi(s) != 0) ? 1 : 0;
+    }
+    return cached != 0 && fuse_dirty() && emit_holes() && !fuse_pack();
+}
+
 // N17: unmark last inner's blues/reds instead of memset nnode. Default off.
 static bool dirty_unmark() {
     static int cached = -1;
@@ -2172,8 +2379,11 @@ static int hash_combine_dirty(
     uint32_t* tu, uint32_t* tv, double* tsm, int64_t* tct,
     uint32_t* dholes, int* dnhole,
     HSlot* dtab, int ntab, int* dnout, int* dovf,
+    uint32_t* dslots = nullptr, int* dnslot = nullptr,
+    uint8_t* damask = nullptr, int* out_m = nullptr,
     double* scan_acc = nullptr, double* hash_acc = nullptr)
 {
+    if (out_m) *out_m = 0;
     cudaEvent_t ea, eb;
     if (scan_acc || hash_acc) {
         cudaEventCreate(&ea);
@@ -2190,7 +2400,8 @@ static int hash_combine_dirty(
             cudaMemset(dnhole, 0, 4);
             cudaMemset(dnout, 0, 4);
             k_rewrite_dirty_fuse<<<be, threads>>>(
-                du, dv, dct, dparent, dirty, n, dkeep, dholes, dnhole, dnout);
+                du, dv, dct, dparent, dirty, n, dkeep, dholes, dnhole, dnout,
+                listed_rebuild() ? damask : nullptr);
             cudaMemcpy(&ndirty_e, dnhole, 4, cudaMemcpyDeviceToHost);
             cudaMemcpy(&nself, dnout, 4, cudaMemcpyDeviceToHost);
         } else {
@@ -2209,6 +2420,7 @@ static int hash_combine_dirty(
     }
     if (ndirty_e <= 0) {
         n9_dirty_hit(0, 0);
+        n21_note_combine(0, 0, 0);
         if (arith) {
             *n_live = nlive_in - nself;
             if (*n_live < 0) *n_live = 0;
@@ -2232,16 +2444,28 @@ static int hash_combine_dirty(
         dirty_rbk(du, dv, dsm, dct, dkeep, n, ndirty_e, n_live,
                   be, threads, tu, tv, tsm, tct, dholes, dnhole, dnout);
         // n9_dirty_hit is inside dirty_rbk (hm vs unique m).
+        n21_note_combine(ndirty_e, 0, 0);
     } else {
     int ntab_use = next_pow2(ndirty_e * 2 + 1024);
     if (ntab_use > ntab) ntab_use = ntab;
     int tb = (ntab_use + threads - 1) / threads;
+    const bool se = slot_emit() && dslots && dnslot;
     // Warp/SM insert was parent-identical and 1.31× slower (n8_hash).
     // Full-dirty RBK was 4.2× slower. Large dirty sets stay on G15 CAS.
     {
         NvRange nv("hash_insert");
-        k_hash_insert<<<be, threads>>>(
-            du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf);
+        if (se) cudaMemset(dnslot, 0, 4);
+        if (listed_insert()) {
+            int bi = (ndirty_e + threads - 1) / threads;
+            if (bi < 1) bi = 1;
+            k_hash_insert_listed<<<bi, threads>>>(
+                dholes, ndirty_e, du, dv, dsm, dct, dtab, ntab_use, dovf,
+                se ? dslots : nullptr, se ? dnslot : nullptr);
+        } else {
+            k_hash_insert<<<be, threads>>>(
+                du, dv, dsm, dct, dkeep, n, dtab, ntab_use, dovf,
+                se ? dslots : nullptr, se ? dnslot : nullptr);
+        }
     }
     static int insert_only = -1;
     if (insert_only < 0) {
@@ -2254,8 +2478,21 @@ static int hash_combine_dirty(
     if (eh) {
         cudaMemset(dnout, 0, 4);
         cudaMemset(dovf, 0, 4);
-        k_hash_emit_holes<<<tb, threads>>>(
-            dtab, ntab_use, dholes, ndirty_e, du, dv, dsm, dct, dnout, dovf);
+        if (se) {
+            int nslot = 0;
+            cudaMemcpy(&nslot, dnslot, 4, cudaMemcpyDeviceToHost);
+            if (nslot > ntab) nslot = ntab;
+            if (nslot > 0) {
+                int bs = (nslot + threads - 1) / threads;
+                if (bs < 1) bs = 1;
+                k_hash_emit_slots<<<bs, threads>>>(
+                    dtab, ntab_use, dslots, nslot, dholes, ndirty_e,
+                    du, dv, dsm, dct, dnout, dovf);
+            }
+        } else {
+            k_hash_emit_holes<<<tb, threads>>>(
+                dtab, ntab_use, dholes, ndirty_e, du, dv, dsm, dct, dnout, dovf);
+        }
         cudaMemcpy(&m, dnout, 4, cudaMemcpyDeviceToHost);
         int ov = 0;
         cudaMemcpy(&ov, dovf, 4, cudaMemcpyDeviceToHost);
@@ -2270,15 +2507,18 @@ static int hash_combine_dirty(
         if (m < ndirty_e) {
             int bt = (ndirty_e - m + threads - 1) / threads;
             if (bt < 1) bt = 1;
-            k_zero_hole_tail<<<bt, threads>>>(dholes, m, ndirty_e, dct);
+            k_zero_hole_tail<<<bt, threads>>>(
+                dholes, m, ndirty_e, dct, listed_rebuild() ? damask : nullptr);
         }
         n9_dirty_hit(ndirty_e, m);
+        n21_note_combine(ndirty_e, m, ntab_use);
     } else {
         k_vacate_kept<<<be, threads>>>(dct, dkeep, n);
         cudaMemset(dnout, 0, 4);
         k_hash_emit<<<tb, threads>>>(dtab, ntab_use, tu, tv, tsm, tct, dnout);
         cudaMemcpy(&m, dnout, 4, cudaMemcpyDeviceToHost);
         n9_dirty_hit(ndirty_e, m);
+        n21_note_combine(ndirty_e, m, ntab_use);
         if (m > 0) {
             if (!fuse) {
                 cudaMemset(dnhole, 0, 4);
@@ -2293,6 +2533,7 @@ static int hash_combine_dirty(
                                           du, dv, dsm, dct);
         }
     }
+    if (out_m) *out_m = m;
     if (arith) {
         *n_live = nlive_in - nself - ndirty_e + m;
         if (*n_live < 0) *n_live = 0;
@@ -2303,6 +2544,7 @@ static int hash_combine_dirty(
     }
     } else {
         n9_dirty_hit(ndirty_e, 0);
+        n21_note_combine(ndirty_e, 0, ntab_use);
         if (arith) {
             *n_live = nlive_in - nself - ndirty_e;
             if (*n_live < 0) *n_live = 0;
@@ -2990,6 +3232,8 @@ static int parhac_e6s_dev(
     if (ntab < 1024) ntab = 1024;
     HSlot* dtab = nullptr;
     int* dnout = nullptr;
+    uint32_t* dslots = nullptr;
+    int* dnslot = nullptr;
     cudaMalloc(&dparent, (size_t)nnode * 4);
     cudaMalloc(&dsz, (size_t)nnode * 4);
     cudaMalloc(&dsz0, (size_t)nnode * 4);
@@ -3043,6 +3287,10 @@ static int parhac_e6s_dev(
     cudaMalloc(&tct, (size_t)n_edges * 8);
     cudaMalloc(&dtab, (size_t)ntab * sizeof(HSlot));
     cudaMalloc(&dnout, 4);
+    if (slot_emit()) {
+        cudaMalloc(&dslots, (size_t)ntab * 4);
+        cudaMalloc(&dnslot, 4);
+    }
     // Both of these are cleared once here rather than once per inner
     // iteration: k_hash_emit and k_pack_prop_fused each reset the entries they
     // consume, so both arrive empty.
@@ -3127,6 +3375,7 @@ static int parhac_e6s_dev(
     int* dnhole = nullptr;
     uint8_t* damask = nullptr;
     uint32_t* dalist = nullptr;
+    uint32_t* dalist2 = nullptr;
     int* dnact_l = nullptr;
     uint32_t* droots = nullptr;
     uint32_t* drootflag = nullptr;
@@ -3143,6 +3392,8 @@ static int parhac_e6s_dev(
         cudaMalloc(&damask, (size_t)n_edges);
         cudaMalloc(&dalist, (size_t)n_edges * 4);
         cudaMalloc(&dnact_l, 4);
+        if (listed_rebuild())
+            cudaMalloc(&dalist2, (size_t)n_edges * 4);
     }
     if (lv_rootlist) {
         cudaMalloc(&droots, (size_t)nnode * 4);
@@ -3472,10 +3723,13 @@ static int parhac_e6s_dev(
                         k_mark_acc_blue<<<bp, threads>>>(
                             dblues, dreds, nprop, dparent, ddirty, ddirty);
                         int n_kept = 0;
+                        int emit_m = 0;
+                        const int nact_old = nact_l;
                         hash_combine_dirty(
                             du, dv, dsm, dct, dkeep, dparent, ddirty, nscan,
                             nlive, &n_kept, be, threads, tu, tv, tsm, tct,
                             dholes, dnhole, dtab, ntab, dnout, dovf,
+                            dslots, dnslot, damask, &emit_m,
                             aa ? &aa->rewrite_scan_ms : nullptr,
                             aa ? &aa->hash_ms : nullptr);
                         nlive = n_kept;
@@ -3488,7 +3742,36 @@ static int parhac_e6s_dev(
                         }
                         if (lv_bluelist) {
                             cudaMemset(dnact_l, 0, 4);
-                            if (fuse_pack()) {
+                            if (listed_rebuild() && dalist2) {
+                                if (nact_old > 0) {
+                                    cudaMemcpy(
+                                        dalist2, dalist,
+                                        (size_t)nact_old * 4,
+                                        cudaMemcpyDeviceToDevice);
+                                    int ba = (nact_old + threads - 1) / threads;
+                                    k_keep_zero_listed<<<ba, threads>>>(
+                                        dalist2, nact_old, dkeep);
+                                }
+                                if (emit_m > 0) {
+                                    int bh = (emit_m + threads - 1) / threads;
+                                    k_keep_zero_listed<<<bh, threads>>>(
+                                        dholes, emit_m, dkeep);
+                                    k_retest_holes<<<bh, threads>>>(
+                                        dholes, emit_m, dsm, dct, TL, damask);
+                                }
+                                if (nact_old > 0) {
+                                    int ba = (nact_old + threads - 1) / threads;
+                                    k_pack_listed<<<ba, threads>>>(
+                                        dalist2, nact_old, damask, dct, dkeep,
+                                        dalist, dnact_l);
+                                }
+                                if (emit_m > 0) {
+                                    int bh = (emit_m + threads - 1) / threads;
+                                    k_pack_listed_new<<<bh, threads>>>(
+                                        dholes, emit_m, damask, dct, dkeep,
+                                        dalist, dnact_l);
+                                }
+                            } else if (fuse_pack()) {
                                 k_rebuild_pack<<<be, threads>>>(
                                     du, dv, dsm, dct, dkeep, ddirty, nscan, TL,
                                     dalist, dnact_l, damask);
@@ -3506,6 +3789,7 @@ static int parhac_e6s_dev(
                             k_unmark_acc_blue<<<bp, threads>>>(
                                 dblues, dreds, nprop, dparent, ddirty, ddirty);
                         }
+                        n21_inner_push((int)nscan, nlive, nact_l);
                     } else if (use_hash) {
                         hash_combine_live(du, dv, dsm, dct, dkeep, dparent, nnode,
                             nlive, &nlive, be, threads, tu, tv, tsm, tct,
@@ -3576,7 +3860,7 @@ static int parhac_e6s_dev(
     cudaFree(dovf);
     cudaFree(dblist); cudaFree(dnlist);
     cudaFree(ddirty); cudaFree(dholes); cudaFree(dnhole);
-    cudaFree(damask); cudaFree(dalist); cudaFree(dnact_l);
+    cudaFree(damask); cudaFree(dalist); cudaFree(dalist2); cudaFree(dnact_l);
     cudaFree(droots); cudaFree(drootflag); cudaFree(dnroot);
     cudaFree(dfrozen); cudaFree(dprop);
     cudaFree(pkey_in); cudaFree(pkey_out);
@@ -3587,7 +3871,8 @@ static int parhac_e6s_dev(
     // The allocations, not the current values of the names; see alloc_t* above.
     cudaFree(alloc_tu); cudaFree(alloc_tv);
     cudaFree(alloc_tsm); cudaFree(alloc_tct); cudaFree(dblk);
-    cudaFree(dtab); cudaFree(dnout); cudaFree(dkey); cudaFree(dkeyo);
+    cudaFree(dtab); cudaFree(dnout); cudaFree(dslots); cudaFree(dnslot);
+    cudaFree(dkey); cudaFree(dkeyo);
     if (zprof) {
         cudaFree(ddbg); cudaFree(dnact); cudaFree(dndirty); cudaFree(dnstar);
         cudaFree(ddirty_blue); cudaFree(ddirty_star);

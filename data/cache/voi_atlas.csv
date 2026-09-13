@@ -96,3 +96,19 @@ heap_s4,E4,stock waterz S4,0.2,0.375447,0.32989,294518,162,True,pass,notes/LOG.m
 heap_s4,E4,stock waterz S4,0.3,0.452148,0.242154,322167,162,True,pass,notes/LOG.md#e4-pass
 heap_s4,E4,stock waterz S4,0.4,0.517995,0.217998,345376,162,True,pass,notes/LOG.md#e4-pass
 heap_s4,E4,stock waterz S4,0.5,0.610281,0.209424,379876,162,True,pass,notes/LOG.md#e4-pass
+complete_link,N20_X4,min-of-means CPU heap,0.2,1.295968,0.213121,342758,,False,under_merge,notes/N20_X4.md
+complete_link,N20_X4,min-of-means CPU heap,0.3,1.349673,0.203557,377918,,False,under_merge,notes/N20_X4.md
+complete_link,N20_X4,min-of-means CPU heap,0.4,1.406606,0.198141,408304,,False,under_merge,notes/N20_X4.md
+complete_link,N20_X4,min-of-means CPU heap,0.5,1.482438,0.193782,447138,1641.5,False,under_merge,notes/N20_X4.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.2,0.767215,0.268408,299459,,False,under_merge,notes/N20_X5.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.3,0.893815,0.218193,336318,,False,under_merge,notes/N20_X5.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.4,1.017719,0.206736,372557,,False,under_merge,notes/N20_X5.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.5,1.129724,0.200797,413052,1870.5,False,under_merge,notes/N20_X5.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.2,0.855889,0.214365,424568,1116.2,False,under_merge,notes/N20_RNN.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.3,0.863388,0.208704,437746,,False,under_merge,notes/N20_RNN.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.4,0.879412,0.205178,451822,,False,under_merge,notes/N20_RNN.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.5,0.929291,0.201079,475631,,False,under_merge,notes/N20_RNN.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.2,0.372129,0.349185,294231,6645.3,True,pass,notes/N20_LU2.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.3,0.452448,0.242274,322099,,True,pass,notes/N20_LU2.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.4,0.518023,0.218028,345243,,True,pass,notes/N20_LU2.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.5,0.610254,0.209481,379805,,True,pass,notes/N20_LU2.md
