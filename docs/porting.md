@@ -12,14 +12,15 @@ is not. HBM GB/s is the wrong scaler for these kernels.
 
 ## 1. Build for the SM you run on
 
-`scripts/build_cuda.sh` fatbins **sm_86** (Ampere) and **sm_120**
-(Blackwell) as SASS. Ada, Hopper, or anything else needs another
-`-gencode arch=compute_XX,code=sm_XX`.
+`scripts/build_cuda.sh` fatbins **sm_86** (Ampere SASS), **sm_89** (Ada
+SASS), **sm_120** (Blackwell SASS), and **sm_86 PTX** so other SMs can
+JIT. Hopper or a new arch that will not JIT from that PTX still needs
+another `-gencode`.
 
 ```bash
-# after adding your SM to ARCH_FLAGS in scripts/build_cuda.sh
 bash scripts/build_cuda.sh
 uv run python -c "import gpu_waterz as w; print(w.cuda_libs_ready())"
+uv run python examples/torch_to_labels.py
 ```
 
 Lab nvcc is 12.8 (`WATERZ_NVCC` if yours lives elsewhere).
@@ -33,7 +34,7 @@ On 2.16 Gvox:
 | Fact | Number | Source |
 |---|---|---|
 | Naive fused WS working set | ~42 GiB | fused buffers, no z-slab |
-| Legal stack WS peak (z-slab) | **13.22 GiB** | pin stack, N=3 slabs |
+| Pin stack WS peak (z-slab) | **13.22 GiB** | pin stack, N=3 slabs |
 | `SHARE_OFF=1` extra | +4 B/vox | measured on the pin card |
 | Affinity uint8 + labels uint32 | 6.5 + 8.6 GiB | input/output only |
 | 8-tile serial fallback | 8.3x slower; dead | lab notes |
@@ -55,7 +56,7 @@ measure peak on the card you run before changing buffer-sharing.
 | Val cuts under 100 ms | N18 B3: `COMPACT_EVERY=8` won on val, lost on 2.16 (1765 vs 1690 ms agg) |
 | Dual-eps 0.08 / 0.40 | 0.41-0.49 fail merge VOI at T=0.3 |
 
-Env for the measured stack (all getenv; see README):
+Env for the measured stack (all getenv; `scripts/eval.sh` sets these):
 
 ```
 WATERZ_UF_ALGO=3 WATERZ_HOST_PARK=0 WATERZ_AFF_PARK=0 WATERZ_AGG_LEVERS=15
@@ -65,7 +66,8 @@ WATERZ_FUSE_DIRTY=1 WATERZ_NLIVE_ARITH=1 WATERZ_EMIT_HOLES=1
 
 `WATERZ_LISTED_INSERT` / `LISTED_REBUILD` / `SLOT_EMIT` / `LIST_JUMP` match
 parents and pass four-T. Stacked (N23 A0) they cut 2.16 agg by ~56 ms
-(1622-1624 vs 1679.9). They are off in the pin; see README.
+(1622-1624 vs 1679.9). They are off in the pin. Leftover kernels:
+[lab.md](../notes/lab.md).
 
 ---
 
@@ -96,7 +98,7 @@ partition or do not close 1680 ms. See [lab.md](../notes/lab.md).
 ## 5. Checklist on a new card
 
 1. Add SM, rebuild, `cuda_libs_ready()`.
-2. CREMI-A val four-T (`bash scripts/legal_eval.sh`) and two-run
+2. CREMI-A val four-T (`bash scripts/eval.sh`) and two-run
    fragment identity.
 3. Record `nvidia-smi` name, driver, VRAM, `ws_peak`.
 4. Idle, parks off, CUDA-event e2e on the volume you care about.

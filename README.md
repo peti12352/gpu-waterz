@@ -10,11 +10,13 @@ EM volume -> CNN affinities [3,Z,Y,X] -> gpu_waterz.segment -> uint32 labels
 Most pipelines still run CPU waterz after the net. This keeps the decode
 on the device.
 
-On [CREMI](https://cremi.org) sample A (2016 MICCAI challenge: adult
-Drosophila serial-section EM) we grade a 1200 x 1200 x 125 crop. VOI
-tracks stock waterz to +0.02 at 0.2, 0.3, 0.4, and 0.5 (split and merge
-both). A second run is byte-identical. Speed is a larger 2.16 Gvox stack
-on an idle RTX 5090, not that crop: 3.1 s, ~13 GiB peak vs ~42 fused.
+Quality is the shipped CREMI-A val volume: uint8 affinities
+`[3,125,1200,1200]` plus uint32 GT
+([tarball](https://drive.google.com/file/d/1zbGpyr9M5Pvhgfy96V9erQwAeRZo23hW/view?usp=drive_link)).
+VOI tracks stock waterz to +0.02 at 0.2, 0.3, 0.4, and 0.5 (split and
+merge both). A second run is byte-identical. Speed is `scripts/make_big.py`'s
+3x2x2 tile of that affinity (`[3,375,2400,2400]` = 2.16 Gvox) on an idle
+RTX 5090: 3.1 s, ~13 GiB peak vs ~42 fused.
 
 ![3.1 s on 2.16 Gvox, idle RTX 5090](docs/speed_216.png)
 
@@ -33,7 +35,8 @@ uv run python examples/torch_to_labels.py
 
 `uv sync` is the Python package. The `.so` files are a separate nvcc step.
 Missing libs raise `RuntimeError` pointing at `scripts/build_cuda.sh`.
-Override the compiler with `WATERZ_NVCC`. Fatbin is `sm_86` and `sm_120`.
+Override the compiler with `WATERZ_NVCC`. Fatbin is `sm_86` (Ampere),
+`sm_89` (Ada), `sm_120` (Blackwell), plus `sm_86` PTX for other cards.
 
 ```python
 import numpy as np
@@ -63,7 +66,7 @@ wz.segment(aff, [0.8, 0.7, 0.6, 0.5], threshold_mode="score")
 |---|---|
 | `segment(aff, thresholds, *, threshold_mode="affinity", eps=None, ...)` | affinities to labels |
 | `agglomerate(...)` | same as `segment` (list, not a waterz generator) |
-| `labels_from_fragments(aff, frag, thresholds, ...)` | merge existing fragments (LSD agglomerate-worker shape) |
+| `labels_from_fragments(aff, frag, thresholds, ...)` | GPU merge of existing fragments; numpy in/out |
 | `segment_d(..., return_device=True)` | device-resident; torch CUDA in stays on device |
 | `fragments(aff)` | watershed only |
 | `region_graph(aff, frag)` | contact-mean RAG arrays |
@@ -78,13 +81,14 @@ Raising past 0.40 fails merge VOI at 0.3.
 Stock `waterz.agglomerate` is the full pipeline (our `segment`). LSD's
 agglomerate worker is merge-from-fragments (`labels_from_fragments`).
 
-## Quality (CREMI sample A, 1200 x 1200 x 125)
+## Quality (CREMI-A val `[3,125,1200,1200]`)
 
-[CREMI](https://cremi.org) is a neuron-reconstruction challenge on adult
-fly brain EM. Sample A is one of three volumes; this crop is 1200 x 1200
-x 125 (CREMI A is 1250 x 1250 x 125). Affinities are from the CAD
-checkpoint (Liu et al., CVPR 2024), not a CREMI leaderboard entry. What
-we grade: [docs/decode.md](docs/decode.md).
+Files: `cremiA_val/{affinity,gt}.h5` in the
+[dataset tarball](https://drive.google.com/file/d/1zbGpyr9M5Pvhgfy96V9erQwAeRZo23hW/view?usp=drive_link).
+The tarball README: EM + GT are CREMI sample A, crop z 100:225 of the
+training volume, xy 0:1200; affinities from the released CAD checkpoint
+`CremiA.ckpt` (Liu et al., CVPR 2024). What we grade:
+[docs/decode.md](docs/decode.md).
 
 VOI split **and** VOI merge each within +0.02 of stock waterz at affinity
 0.2, 0.3, 0.4, 0.5. Run-to-run labels are byte-identical. Fragment IDs
@@ -112,33 +116,22 @@ affinity 0.3. Pin `data/cache/N19_I0_REPRO.json`.
 | extract | 18 |
 | end-to-end | 3093 (~0.70 Gvox/s) |
 
-Four-threshold VOI: PASS. Two full runs, identical labels. A busy GPU
-makes these times meaningless (one co-tenant run moved 1634-5018 ms).
-
-Env used for that pin:
-
-```
-WATERZ_UF_ALGO=3 WATERZ_HOST_PARK=0 WATERZ_AFF_PARK=0 WATERZ_AGG_LEVERS=15
-WATERZ_FOLD_FLATTEN=1 WATERZ_SHARE_OFF=1 WATERZ_HOOK_ROOT=1
-WATERZ_FUSE_DIRTY=1 WATERZ_NLIVE_ARITH=1 WATERZ_EMIT_HOLES=1
-```
-
-`WATERZ_LISTED_INSERT` / `LISTED_REBUILD` / `SLOT_EMIT` / `LIST_JUMP` are
-off in this pin. Stacked they cut 2.16 agg by ~56 ms and still match
-parents.
+Four-threshold VOI: PASS. Two full runs, identical labels. Time only on an
+idle GPU (a co-tenant moved one run 1634-5018 ms). Pin env and leftover
+knobs: [docs/porting.md](docs/porting.md).
 
 ```
-bash scripts/legal_eval.sh
+bash scripts/eval.sh          # four-T + identity on data/cremiA_val
+bash scripts/eval.sh --216    # plus 2.16 Gvox timing if that HDF5 exists
 ```
 
 ## Docs
 
 | File | What it is |
 |---|---|
-| [docs/usage.md](docs/usage.md) | pipeline call sites, stages, build |
+| [docs/usage.md](docs/usage.md) | pipeline call sites, stages, build, eval volumes |
 | [docs/decode.md](docs/decode.md) | why this algorithm, VOI, knobs vs other clustering |
-| [docs/porting.md](docs/porting.md) | other GPUs: build, VRAM, how to time |
-| [notes/lab.md](notes/lab.md) | leftover kernels, closed attacks, remaining problem |
+| [docs/porting.md](docs/porting.md) | other GPUs: build, VRAM, pin env, how to time |
 | [docs/citations.md](docs/citations.md) | papers and code we used, with the conclusion |
 
 Vendored waterz: `funkey/waterz` `a0184d2`. Measurements: driver 580, nvcc 12.8.

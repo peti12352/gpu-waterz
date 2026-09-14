@@ -69,8 +69,7 @@ def build_cuda_home(root: Path, refresh: bool):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arch", default="sm_86",
-                    help="sm_86 = 3090 Ti, sm_120 = 5090; syntax only, so it "
-                         "mostly does not matter")
+                    help="sm_86 Ampere, sm_89 Ada, sm_120 Blackwell; syntax only"
     ap.add_argument("--cache", default="/tmp/waterz_cuda",
                     help="where to keep the downloaded headers")
     ap.add_argument("--refresh", action="store_true")

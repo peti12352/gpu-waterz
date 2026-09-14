@@ -27,8 +27,8 @@ and >=0.5 fail merge VOI at 0.3.
 
 ```
 bash scripts/build_cuda.sh
-bash scripts/legal_eval.sh          # four-T + identity on CREMI-A val
-bash scripts/legal_eval.sh --216    # plus 2.16 timing if the volume exists
+bash scripts/eval.sh          # four-T + identity on CREMI-A val
+bash scripts/eval.sh --216    # plus 2.16 timing if the volume exists
 ```
 
 Product default is paper-style ParHAC (E6s). Listed / slot-emit / CSR

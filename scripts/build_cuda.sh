@@ -13,6 +13,8 @@ if [[ -z "${NVCC}" || ! -x "$NVCC" ]]; then
 fi
 ARCH_FLAGS=(
   -gencode arch=compute_86,code=sm_86
+  -gencode arch=compute_89,code=sm_89
+  -gencode arch=compute_86,code=compute_86
   -gencode arch=compute_120,code=sm_120
 )
 INC=(-I/usr/local/cuda-12.8/targets/x86_64-linux/include)

@@ -6,6 +6,11 @@ Default (CREMI-A val, if present):
   - four-T VOI at 0.2/0.3/0.4/0.5 (dual-eps 0.08)
   - fragment count vs the published 2,175,400 / 506,568 numbers
 
+VOI is `scripts/voi_numpy.py` (same formula as funkey/waterz
+`evaluate.hpp`: skip gt==0, predicted 0 is a label, bits). Does not
+import waterz. Set WATERZ_USE_WATERZ_EVAL=1 to grade with
+`waterz.evaluate` instead when that package is installed.
+
 Optional --216 times the [3,375,2400,2400] volume when that
 HDF5 exists. Needs h5py: `uv sync --extra eval`.
 """
@@ -32,6 +37,21 @@ from gpu_waterz.limits import (  # noqa: E402
 )
 from voi_numpy import voi_split_merge  # noqa: E402
 
+
+def voi_pair(seg: np.ndarray, gt: np.ndarray) -> tuple[float, float]:
+    if os.environ.get("WATERZ_USE_WATERZ_EVAL") == "1":
+        import waterz
+
+        scores = waterz.evaluate(
+            np.asarray(seg, dtype=np.uint64),
+            np.asarray(gt, dtype=np.uint64),
+        )
+        return float(scores["voi_split"]), float(scores["voi_merge"])
+    return voi_split_merge(seg, gt)
+
+
+SHAPE_216 = (3, 375, 2400, 2400)
+
 VAL_DIR = Path(os.environ.get("WATERZ_VAL_DIR", ROOT / "data/cremiA_val"))
 AFF_H5 = VAL_DIR / "affinity.h5"
 GT_H5 = VAL_DIR / "gt.h5"
@@ -48,8 +68,6 @@ def _big_candidates() -> list[Path]:
     ))
     return out
 
-
-SHAPE_216 = (3, 375, 2400, 2400)
 
 PRODUCT_ENV = {
     "WATERZ_UF_ALGO": "3",
@@ -132,14 +150,14 @@ def grade_val() -> dict:
     run_a = wz.segment(aff, [0.3])[0]
     run_b = wz.segment(aff, [0.3])[0]
     ident = bool(np.array_equal(run_a, run_b))
-    split_t3, merge_t3 = voi_split_merge(run_a, gt)
+    split_t3, merge_t3 = voi_pair(run_a, gt)
     t3_ok, sl3, ml3 = grade_voi(split_t3, merge_t3, 0.3)
 
     four = wz.segment(aff, list(AFF_THRESHOLDS))
     four_rows = []
     four_ok = True
     for t, lab in zip(AFF_THRESHOLDS, four):
-        split, merge = voi_split_merge(lab, gt)
+        split, merge = voi_pair(lab, gt)
         ok, sl, ml = grade_voi(split, merge, t)
         four_ok = four_ok and ok
         four_rows.append({

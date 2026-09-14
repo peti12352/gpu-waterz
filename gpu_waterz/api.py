@@ -124,8 +124,9 @@ def labels_from_fragments(
     """Merge existing fragments with contact-mean ParHAC (no watershed).
 
     LSD agglomerate-worker shape: affinities + fragment volume in, labels out.
-    Still the waterz mean statistic, not mutex/Kruskal. Four-T VOI numbers in
-    the docs are for *our* watershed fragments on CREMI-A val, not this entry.
+    GPU RAG + ParHAC + extract; numpy in/out (not ``segment_d``). Still the
+    waterz mean statistic, not mutex/Kruskal. Four-T VOI numbers in the docs
+    are for *our* watershed fragments on CREMI-A val, not this entry.
     """
     aff_thr = resolve_thresholds(thresholds, threshold_mode)
     require_cuda_libs()

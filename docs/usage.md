@@ -1,7 +1,7 @@
 # Using gpu-waterz
 
 Install and API table: [README](../README.md). What the algorithm is, and
-what the CREMI sample A numbers mean: [decode.md](decode.md). Other GPUs:
+what the CREMI-A val numbers mean: [decode.md](decode.md). Other GPUs:
 [porting.md](porting.md).
 
 ## vs `pip install waterz`
@@ -29,10 +29,12 @@ bash scripts/build_cuda.sh
 ```
 
 Writes `src/libws_gpu.so` (`csrc/ws.cu`), `src/librag_gpu.so` (`csrc/rag.cu`),
-`src/libparhac_d.so` (`csrc/parhac_d.cu`). Check:
+`src/libparhac_d.so` (`csrc/parhac_d.cu`). Fatbin: sm_86, sm_89, sm_120, plus
+sm_86 PTX. Check:
 
 ```bash
 uv run python -c "import gpu_waterz as w; print(w.cuda_libs_ready())"
+uv run python examples/torch_to_labels.py
 ```
 
 ## Torch
@@ -46,7 +48,7 @@ labs = wz.segment_d(aff, [0.3], return_device=True)
 # labs[0] is already a CUDA torch tensor
 ```
 
-`examples/torch_to_labels.py` is a synthetic cube (no CREMI download).
+`examples/torch_to_labels.py` is a synthetic cube (no dataset download).
 
 ## Daisy / LSD-style workers
 
@@ -61,14 +63,26 @@ labels out.
 
 [LSD agglomerate worker](https://github.com/funkelab/lsd/blob/tutorial/lsd/tutorial/scripts/workers/agglomerate_worker.py)
 is merge-from-fragments. Our `agglomerate` name matches stock waterz (full
-pipeline). `labels_from_fragments` is the host numpy path, not `segment_d`.
-CREMI sample A four-T numbers assume our watershed fragments on that crop.
-`min_size` and merge-from-a-precomputed-RAG are not in the public API yet.
+pipeline). `labels_from_fragments` runs GPU RAG + ParHAC; inputs and labels
+are numpy, not `segment_d`. CREMI-A val four-T numbers assume our watershed
+fragments on that volume. `min_size` and merge-from-a-precomputed-RAG are not
+in the public API yet.
 
 ## Eval volumes
 
-`scripts/legal_eval.sh` looks for the CREMI sample A crop (1200 x 1200 x
-125) at `data/cremiA_val/affinity.h5` and `data/cremiA_val/gt.h5` (or
-`WATERZ_VAL_DIR`). Optional `--216` times `[3,375,2400,2400]` from
-`data/cremiA_216/affinity.h5`, `data/cache/big_216.h5`, or `WATERZ_AFF_216`
-(a 3 x 2 x 2 tiling of that crop, not a CREMI download).
+Dataset tarball:
+https://drive.google.com/file/d/1zbGpyr9M5Pvhgfy96V9erQwAeRZo23hW/view?usp=drive_link
+
+Unpack `cremiA_val/{affinity.h5,gt.h5}` into `data/cremiA_val/` (or set
+`WATERZ_VAL_DIR`). Then:
+
+```bash
+uv sync --extra eval
+bash scripts/eval.sh
+uv run python scripts/make_big.py          # -> data/cremiA_216/affinity.h5
+bash scripts/eval.sh --216
+```
+
+`--216` also accepts `data/cache/big_216.h5` or `WATERZ_AFF_216`. `make_big.py`
+is the tarball generator (edge-aware 3x2x2 mirror). `scripts/legal_eval.sh`
+is a wrapper that calls `eval.sh`.

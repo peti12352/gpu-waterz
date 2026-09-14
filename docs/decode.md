@@ -1,8 +1,9 @@
 # Decode: affinity graph to objects
 
-Published VOI numbers are this algorithm on CREMI sample A, timed on an
-idle RTX 5090. Call sites and stages: [usage.md](usage.md). Other GPUs:
-[porting.md](porting.md). Papers: [citations.md](citations.md).
+Published VOI numbers are this algorithm on the shipped CREMI-A val
+volume, timed on an idle RTX 5090. Call sites and stages:
+[usage.md](usage.md). Other GPUs: [porting.md](porting.md). Papers:
+[citations.md](citations.md).
 
 ## In a brain segmentation pipeline
 
@@ -29,18 +30,16 @@ Fragments are supervoxels. The object you count synapses on or load into a
 proofreading graph is **after** mean merge. `fragments()` is a stage hook;
 the quality bar is `segment()`.
 
-## CREMI sample A
+## CREMI-A val (the files we grade)
 
-[CREMI](https://cremi.org) (MICCAI 2016) is a public neuron-reconstruction
-challenge on serial-section TEM of adult Drosophila brain. There are three
-volumes (A, B, C). Each training block is 1250 x 1250 x 125 voxels, about
-5 um on a side (4 x 4 x 40 nm). Sample A is the one we grade.
-
-In this repo, "val" is a 1200 x 1200 x 125 crop of A (`[3,125,1200,1200]`
-affinities). Ground truth is the CREMI neuron labels. Affinities come from
-the CAD checkpoint (Liu et al., CVPR 2024). The gate is VOI vs stock
-waterz on that crop, not the CREMI leaderboard. The 3.1 s figure is a
-2.16 Gvox (3 x 2 x 2) stack built from val, not a CREMI download.
+Quality is `cremiA_val/{affinity,gt}.h5` from the
+[dataset tarball](https://drive.google.com/file/d/1zbGpyr9M5Pvhgfy96V9erQwAeRZo23hW/view?usp=drive_link).
+Shapes: affinity uint8 `[3,125,1200,1200]`, GT uint32 `[125,1200,1200]`.
+The tarball README is the provenance we use: EM + GT are CREMI sample A,
+crop z 100:225 of the training volume, xy 0:1200; affinities from released
+CAD `CremiA.ckpt` (Liu et al., CVPR 2024). The gate is VOI vs stock waterz
+on those arrays. The 3.1 s figure is `scripts/make_big.py` default: a 3x2x2
+mirror-tile of that affinity (`[3,375,2400,2400]` = 2.16 Gvox).
 
 ## Over-segment, then merge
 
@@ -108,7 +107,10 @@ jitter (~1.7e-05).
 IDs need not match waterz. Waterz is not even self-identical on plateaus.
 This code is run-to-run byte-identical because we control ties.
 
-Metric: `waterz.evaluate(labels.uint64, gt.uint64)`.
+Metric: `scripts/voi_numpy.py`, same formula as `waterz.evaluate`
+(skip `gt == 0`, predicted 0 is a label, bits). `scripts/eval.sh` does
+not import waterz. Set `WATERZ_USE_WATERZ_EVAL=1` to grade with
+`waterz.evaluate` when that package is installed.
 
 ## Why ParHAC, and why two eps values
 
@@ -150,7 +152,7 @@ The README claims, with the knobs:
   the merges). ParHAC's published code is CPU (CPAM), not CUDA.
 - 2.16 Gvox fits by z-slab N=3, peak 13.22 GiB. Naive fused working set is
   ~42 GiB. See [porting.md](porting.md).
-- Identity: two full runs, byte-identical labels. CREMI sample A crop
-  nfrag=2175400, bg=506568. Gate: `bash scripts/legal_eval.sh`.
+- Identity: two full runs, byte-identical labels. CREMI-A val
+  nfrag=2175400, bg=506568. Gate: `bash scripts/eval.sh`.
   Pin: `data/cache/N19_I0_REPRO.json`.
 - Public API does not yet have `min_size` or merge-from-a-precomputed-RAG.
