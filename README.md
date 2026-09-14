@@ -135,3 +135,5 @@ bash scripts/eval.sh --216    # plus 2.16 Gvox timing if that HDF5 exists
 | [docs/citations.md](docs/citations.md) | papers and code we used, with the conclusion |
 
 Vendored waterz: `funkey/waterz` `a0184d2`. Measurements: driver 580, nvcc 12.8.
+
+GPU time (idle RTX 5090): Viktor Toth ([@csiki](https://github.com/csiki)).
