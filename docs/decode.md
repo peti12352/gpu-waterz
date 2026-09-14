@@ -6,6 +6,7 @@ and those numbers do not apply. The library still runs; that is a different
 experiment.
 
 Call sites and stages: [usage.md](usage.md). Other GPUs: [porting.md](porting.md).
+Papers: [citations.md](citations.md).
 
 ## In a brain segmentation pipeline
 

@@ -122,6 +122,7 @@ bash scripts/legal_eval.sh
 | [docs/usage.md](docs/usage.md) | pipeline call sites, stages, build |
 | [docs/decode.md](docs/decode.md) | why this algorithm, VOI, knobs vs other clustering |
 | [docs/porting.md](docs/porting.md) | other GPUs: build, VRAM, how to time |
-| [notes/README.md](notes/README.md) | lab log (current pin, closed attacks, stamps) |
+| [notes/lab.md](notes/lab.md) | leftover kernels, closed attacks, remaining problem |
+| [docs/citations.md](docs/citations.md) | papers and code we used, with the conclusion |
 
 Vendored waterz: `funkey/waterz` `a0184d2`. Measurements: driver 580, nvcc 12.8.

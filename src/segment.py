@@ -1,4 +1,4 @@
-"""TASK.md API: affinity -> final uint32 labels. GPU WS + RAG + G1 S4 heap."""
+"""Affinity -> final uint32 labels. GPU watershed + RAG + contact-mean ParHAC."""
 from __future__ import annotations
 
 import argparse
@@ -81,7 +81,7 @@ def _ck(rc):
 class DevBuf:
     """A cudaMalloc'd array. Exposes __cuda_array_interface__ so a caller can
     keep the result in VRAM and hand it to torch, cupy or numba without a copy,
-    which is what TASK's "labels in VRAM" grading asks for."""
+    which is what device-resident callers (torch / cupy) need."""
 
     def __init__(self, shape, dtype, ptr=None, owner=None):
         self.shape = tuple(int(s) for s in np.atleast_1d(shape))
@@ -180,9 +180,9 @@ def _dev_view(a):
 
 
 def cuda_event_time(fn):
-    """Run fn and return (result, device milliseconds). CUDA events, as TASK
-    requires, so the number excludes host launch overhead and includes only
-    work the device actually did between the two markers."""
+    """Run fn and return (result, device milliseconds). CUDA events, so the
+    number excludes host launch overhead and includes only work the device
+    actually did between the two markers."""
     rt = _rt()
     a, b = ctypes.c_void_p(), ctypes.c_void_p()
     _ck(rt.cudaEventCreate(ctypes.byref(a)))
@@ -566,8 +566,8 @@ def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999,
 
     Thresholds are affinity. `eps` overrides ParHAC schedule (see `segment`).
 
-    With `return_device` the labels stay in VRAM as DevBufs, which is the path
-    TASK grades. Otherwise they come back as host uint32 [Z,Y,X].
+    With `return_device` the labels stay in VRAM as DevBufs. Otherwise they
+    come back as host uint32 [Z,Y,X].
     """
     _ensure_sv7()
     libw = ctypes.CDLL(str(_WS))
@@ -640,8 +640,8 @@ def segment_d(aff, thresholds, aff_low=1e-4, aff_high=0.9999,
     )
     # k_flow is the only WS kernel that reads aff (E5). Park it so e9b
     # peak excludes 3 B/vox. Re-upload before RAG, which still needs it.
-    # WATERZ_AFF_PARK=0 keeps aff in VRAM (TASK speed path: aff already
-    # resident; the D2H/H2D is not free).
+    # WATERZ_AFF_PARK=0 keeps aff in VRAM (speed path: aff already resident;
+    # the D2H/H2D is not free).
     aff_stash = None
     parked = False
     want_aff_park = os.environ.get("WATERZ_AFF_PARK", "0") == "1"

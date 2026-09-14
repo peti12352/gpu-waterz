@@ -43,7 +43,6 @@ INCLUDE_DIRS = [
     "curand/include",
 ]
 
-
 def build_cuda_home(root: Path, refresh: bool):
     """Assemble the include/nvvm/bin layout clang's CUDA detection expects."""
     pkg = root / "pkg"
@@ -71,7 +70,6 @@ def build_cuda_home(root: Path, refresh: bool):
     if not (inc / "cuda_runtime.h").is_file():
         raise SystemExit("NV missing cuda_runtime.h; wheel layout changed")
     return home
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -112,14 +110,13 @@ def main():
         r = subprocess.run(cmd, capture_output=True, text=True)
         out = (r.stdout + r.stderr).strip()
         n_err = out.count("error:")
-        print(f"NV {'ok  ' if r.returncode == 0 else 'FAIL'} {s}"
+        print(f"NV {'ok ' if r.returncode == 0 else 'FAIL'} {s}"
               f"{'' if r.returncode == 0 else f'  ({n_err} errors)'}")
         if r.returncode != 0:
             print(out[:8000])
             rc = 1
     print(f"NV {'PASS' if rc == 0 else 'FAIL'}")
     return rc == 0
-
 
 if __name__ == "__main__":
     raise SystemExit(0 if main() else 1)

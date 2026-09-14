@@ -1,5 +1,4 @@
 {
-  "claim": "not a 2 Gvox/s number; not 3090 Ti",
   "mode": "voi_only",
   "name": "N19_I0_REPRO",
   "ident_diag": {
@@ -94,7 +93,6 @@
     }
   },
   "run216": {
-    "claim": "not a 2 Gvox/s number; not 3090 Ti",
     "gpu": "NVIDIA GeForce RTX 5090, 526 MiB, 31584 MiB, 0 %",
     "shape": [
       3,

@@ -76,7 +76,7 @@ an optional env, not the product default.
 
 e2e **3093 ms (~0.70 Gvox/s)**: WS 1309, RAG 85, agg 1680, extract 18.
 
-Largest nsys owners on that run (`n19_owners.json`):
+Largest nsys owners on that run:
 
 | kernel | ms | note |
 |---|---|---|
@@ -93,8 +93,7 @@ scaler.
 
 Leftover if the heavy agg kernels vanished: still ~690-1130 ms agg plus
 hundreds of ms of WS. New merge classes (mutex, Kruskal, RNN, StarMerge)
-change the partition or do not close 1680 ms. See
-[WHERE_WE_ARE.md](../notes/WHERE_WE_ARE.md).
+change the partition or do not close 1680 ms. See [lab.md](../notes/lab.md).
 
 ---
 

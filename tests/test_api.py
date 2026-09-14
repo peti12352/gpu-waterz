@@ -37,7 +37,8 @@ def test_import_surface():
         "segment", "agglomerate", "segment_d", "fragments", "region_graph",
         "labels_from_fragments",
         "scores_to_affinity", "from_torch", "to_torch", "cuda_libs_ready",
-        "resolve_thresholds", "require_cuda_libs",
+        "resolve_thresholds", "require_cuda_libs", "voi_limits", "grade_voi",
+        "AFF_THRESHOLDS",
     ):
         assert hasattr(wz, name)
 

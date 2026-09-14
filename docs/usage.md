@@ -14,8 +14,8 @@ what the CREMI-A numbers mean: [decode.md](decode.md). Other GPUs:
 | Stages | mostly monolith | `fragments`, `region_graph`, `labels_from_fragments`, e2e |
 | Merge order | exact serial heap | (1+eps) contact-mean ParHAC; VOI-matched on CREMI-A |
 
-Do not infer units from the numeric range. The shipped baseline script
-calls waterz with `score = 1 - aff` ([notes/THRESHOLD.md](../notes/THRESHOLD.md)).
+Do not infer units from the numeric range. Stock waterz is called with
+`score = 1 - aff` (affinity 0.2/0.3/0.4/0.5 -> scores 0.8/0.7/0.6/0.5).
 
 Upstream: https://github.com/funkey/waterz
 Region-graph helpers: https://github.com/PytorchConnectomics/waterz

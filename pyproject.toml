@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 torch = ["torch"]
 zarr = ["zarr"]
+eval = ["h5py"]
 
 [project.urls]
 Repository = "https://github.com/peti12352/gpu-waterz"

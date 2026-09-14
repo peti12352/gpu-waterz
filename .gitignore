@@ -1,18 +1,9 @@
-# Large / local-only (dataset on TASK Drive link; not in this repo)
+# Large / local-only (CREMI-A val is not in this repo)
 data/*
 !data/cache/
 data/cache/*
 !data/cache/voi_atlas.csv
-!data/cache/voi_atlas.json
-!data/cache/n19_dead.jsonl
-!data/cache/n19_owners.json
 !data/cache/N19_I0_REPRO.json
-!data/cache/n20_dead.jsonl
-!data/cache/n21_dead.jsonl
-!data/cache/n22_dead.jsonl
-!data/cache/N21_D0.json
-!data/cache/N21_D0_OWNERS.json
-!data/cache/N22_D0.json
 
 *.h5
 .venv/
@@ -21,10 +12,11 @@ __pycache__/
 *.so
 *.egg-info/
 .ipynb_checkpoints/
-docs/hn.md
-papers/*.pdf
-papers/repos/
-papers/oa/
+notes/*.log
+# PDFs, clones, txt extracts. What we concluded: docs/citations.md
+papers/
+# Campaign probes, dead kernels, per-trial notes (local fossil)
+archive/
 tmp_sync/
 .cuda-nvrtc*
 *.nsys-rep
