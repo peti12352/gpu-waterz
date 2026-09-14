@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 """G0: a CPU replica of parhac_e6s_dev, and the restructured variant beside it.
 
-This exists because the machine has no GPU and the g1-g4 changes touch a hot
-path whose whole value is that it is bit-identical. Writing that CUDA blind and
-calling it done would be worthless. So instead the algorithm is re-implemented
-here in numpy twice, once mirroring the current kernel sequence, once with the
-active-list / dirty-set / root-list restructuring, and the two are required to
-agree exactly.
+This exists because a CPU replica can gate kernel changes without a GPU.
+The two numpy models (current kernel sequence vs active-list / dirty-set /
+root-list) must agree exactly.
 
 Why a sequential replica can be exact. Every racing write in the GPU loop is
 order-independent by construction: prop is an atomicMax, sz and the HSlot sums
@@ -18,12 +15,11 @@ edge order does not enter any decision either. That is why the GPU path is
 deterministic at all, and it is what makes a serial model faithful rather than
 merely similar.
 
-Faithfulness is not assumed. `--mode base` reproduces the counters that
-p0aa_e6s.py recorded from the real device run on this exact cached RAG at
-T=0.3, eps=0.08: n_layer, the 17-element layer_outers and layer_merges vectors,
-nouter, ninner, nmerge, sum_nlive and sum_above. Matching two 17-element
-vectors and five scalars is a tight enough fingerprint that a model which does
-so is running the same algorithm.
+Faithfulness is not assumed. `--mode base` reproduces counters from a device
+run on this cached RAG at T=0.3, eps=0.08: n_layer, the 17-element
+layer_outers and layer_merges vectors, nouter, ninner, nmerge, sum_nlive and
+sum_above. Matching two 17-element vectors and five scalars is a tight enough
+fingerprint that a model which does so is running the same algorithm.
 
 The restructuring rests on one lemma, which `--mode both` checks empirically on
 every merging iteration rather than trusting the argument:
@@ -40,7 +36,7 @@ every merging iteration rather than trusting the argument:
 
 That lemma is what licenses compacting only the incidence rows of the merged
 blues and their receiving reds instead of the whole live edge array, which is
-44% of agglomeration cost by the m1 byte model.
+44% of agglomeration cost by a byte-traffic model.
 
 Runtime is a few minutes for base at val scale; it does the same ~700 GB of
 logical work the GPU does. Use --max-layer to cut it short while iterating.
@@ -62,7 +58,7 @@ CACHE = ROOT / "data/cache"
 U64 = np.uint64
 SM_BYTE_SCALE = 255.0
 
-# The counters p0aa_e6s.py read back from the device on this same rag.npz.
+# Optional device-run counters next to rag.npz, if you have them.
 FINGERPRINT = "p0aa_e6s.json"
 
 
@@ -612,8 +608,8 @@ def run(mode, u0, v0, sm0, ct0, max_id, thr, eps, max_outer, max_layer, trace,
                         # edge's mean changes: it either absorbed a duplicate or
                         # it died. So the active set is exact after this delta.
                         #
-                        # stale_active models the plan's claim that the list can
-                        # be rebuilt "once per layer": it drops dead edges but
+                        # stale_active rebuilds the list once per layer:
+                        # it drops dead edges but
                         # never re-tests a survivor's mean. That misses edges
                         # that rise through TL by absorbing a higher-mean
                         # duplicate, and the run diverges.
@@ -721,8 +717,7 @@ def main():
     ap.add_argument("--no-size-asym", action="store_true",
                     help="V2: drop the sz[red] >= sz[blue] propose predicate")
     ap.add_argument("--stale-active", action="store_true",
-                    help="G3 variant: rebuild the active list only at layer "
-                         "entry, as the plan proposes")
+                    help="rebuild the active list only at layer entry")
     ap.add_argument("--csr", action="store_true",
                     help="E2: dirty-combine via incidence lists, not a "
                          "full-array endpoint scan")
@@ -768,24 +763,26 @@ def main():
         "base" in got and not args.max_layer and not args.sub
         and abs(args.eps - 0.08) < 1e-12 and abs(args.threshold - 0.3) < 1e-12
     ):
-        ref = json.loads((CACHE / FINGERPRINT).read_text())
-        b = got["base"]
-        checks = [
-            ("n_layer", b["n_layer"], ref["n_layer"]),
-            ("nouter", b["nouter"], ref["nouter"]),
-            ("ninner", b["ninner"], ref["ninner"]),
-            ("nmerge", b["nmerge"], ref["nmerge"]),
-            ("sum_nlive", b["sum_nlive"], ref["sum_nlive"]),
-            ("sum_above", b["sum_above"], ref["sum_above"]),
-            ("layer_outers", b["layer_outers"], ref["layer_outers"]),
-            ("layer_merges", b["layer_merges"], ref["layer_merges"]),
-        ]
-        print(f"\nG0 base vs {FINGERPRINT} (recorded from the device run)")
-        for name, mine, theirs in checks:
-            good = mine == theirs
-            ok &= good
-            print(f"G0   {'ok  ' if good else 'DIFF'} {name:14s} "
-                  f"model={mine} device={theirs}")
+        ref_path = CACHE / FINGERPRINT
+        if ref_path.is_file():
+            ref = json.loads(ref_path.read_text())
+            b = got["base"]
+            checks = [
+                ("n_layer", b["n_layer"], ref["n_layer"]),
+                ("nouter", b["nouter"], ref["nouter"]),
+                ("ninner", b["ninner"], ref["ninner"]),
+                ("nmerge", b["nmerge"], ref["nmerge"]),
+                ("sum_nlive", b["sum_nlive"], ref["sum_nlive"]),
+                ("sum_above", b["sum_above"], ref["sum_above"]),
+                ("layer_outers", b["layer_outers"], ref["layer_outers"]),
+                ("layer_merges", b["layer_merges"], ref["layer_merges"]),
+            ]
+            print(f"\nG0 base vs {FINGERPRINT} (recorded from the device run)")
+            for name, mine, theirs in checks:
+                good = mine == theirs
+                ok &= good
+                print(f"G0   {'ok  ' if good else 'DIFF'} {name:14s} "
+                      f"model={mine} device={theirs}")
 
     if len(modes) == 2:
         print("\nG0 base vs fast equivalence")
@@ -801,8 +798,6 @@ def main():
     report = {m: {k: val for k, val in r.items() if k != "root"}
               for m, r in got.items()}
     report["pass"] = bool(ok)
-    # Recorded so m1_cost_model.py can refuse work counters taken from a
-    # subgraph, whose visit ratios are not the full graph's.
     report["nedge"] = int(u.size)
     report["nnode"] = int(max_id + 1)
     report["sub"] = int(args.sub)

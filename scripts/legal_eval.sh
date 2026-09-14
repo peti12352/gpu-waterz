@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Product gate on the public API: four-T VOI + T=0.3 identity.
-# Optional --216 times official [3,375,2400,2400] if that HDF5 is present.
+# Optional --216 times [3,375,2400,2400] if that HDF5 is present.
 #
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

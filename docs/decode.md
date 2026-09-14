@@ -119,5 +119,5 @@ chunk boundary. A freeze that is not their Algorithm 2 produces different
 parents than ParHAC. We stopped.
 
 [funkey/waterz PR 24](https://github.com/funkey/waterz/pull/24) took CPU RAG
-52s -> 18s and agglomeration 71s -> 28s on 1024³-class volumes. That is the
+52s -> 18s and agglomeration 71s -> 28s on 1024^3-class volumes. That is the
 CPU class this GPU path replaces.

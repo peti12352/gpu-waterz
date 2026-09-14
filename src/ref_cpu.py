@@ -644,7 +644,7 @@ def agglomerate_boruvka(
     high: float = 0.9999,
     fragments: np.ndarray | None = None,
 ) -> dict[float, np.ndarray]:
-    """PLAN §3.4 live-mean Borůvka. Independent of heap order."""
+    """Live-mean Boruvka. Independent of heap order."""
     if fragments is None:
         fragments = watershed(aff, low, high)
     if _BORUVKA_SO.is_file() and _RAG_SO.is_file():

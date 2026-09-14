@@ -1,12 +1,55 @@
 # gpu-waterz
 
-GPU affinity-flow watershed and contact-mean agglomeration. Same partition
-class as stock [`waterz`](https://github.com/funkey/waterz) on CREMI-A;
-call it from numpy or torch CUDA.
+CUDA decode for connectomics affinities: watershed fragments, then
+contact-mean agglomeration. Same partition class as stock
+[`waterz`](https://github.com/funkey/waterz) on CREMI-A (VOI, not fragment
+IDs). Call from numpy or torch CUDA.
 
 ```
 EM volume -> CNN affinities [3,Z,Y,X] -> gpu_waterz.segment -> uint32 labels
 ```
+
+## What this repo contributes
+
+Not a new merge rule. Funke et al. defined waterz; Dhulipala et al. defined
+ParHAC. This repo is the GPU implementation, the eps values that keep VOI
+legal on CREMI-A, and the table of other clustering that does not.
+
+1. **A CUDA waterz-class pipeline.** Device affinity-flow watershed (one
+   basin per plateau; extra closed-plateau components fail VOI), a
+   contact-mean RAG with integer `sum/count` (float `atomicAdd` was not
+   run-to-run identical), and ParHAC agglomeration. Python API: `segment` /
+   `segment_d`, plus `fragments`, `region_graph`,
+   `labels_from_fragments`. Fatbin `sm_86` and `sm_120`.
+
+2. **Approximate merge order; keep the contact-mean statistic.** The serial
+   waterz heap is not what runs. ParHAC (1+eps)-heavy matching on this RAG.
+   Dual-eps measured here: **0.08** for four cuts (0.2, 0.3, 0.4, 0.5);
+   **0.40** for a single T=0.3. 0.09 fails four-T at 0.2; every 0.01 step
+   from 0.41 to 0.49 fails merge VOI at 0.3. ParHAC's published code is CPU,
+   not CUDA. Clustered-graph "small merge" rounds are false on this RAG
+   (layer 0 is most of the merges).
+
+3. **CREMI-A val quality.** VOI split and VOI merge each within +0.02 of
+   stock waterz `a0184d2` at all four affinity cuts on `[3,125,1200,1200]`.
+   Two full runs, byte-identical labels. Fragment IDs need not match
+   waterz. nfrag=2175400, bg=506568. Gate: `bash scripts/legal_eval.sh`.
+
+4. **Speed pin, idle RTX 5090.** `[3,375,2400,2400]` = 2.16 Gvox, aff 0.3,
+   parks off, CUDA events, affinity already in VRAM: e2e **3093 ms
+   (~0.70 Gvox/s)**; WS 1309, RAG 85, agg 1680, extract 18. Pin JSON:
+   `data/cache/N19_I0_REPRO.json`. A busy GPU makes these times meaningless.
+
+5. **VRAM.** z-slab N=3 peaks at **13.22 GiB** on that 2.16 volume. Naive
+   fused working set is ~42 GiB.
+
+6. **Negative result, same RAG, same grader.** Mutex, Kruskal SDSL, GASP
+   AbsMax, RNN, complete-link, WPGMA, size-capped single-linkage, and frozen
+   connected components do not hit both VOI halves.
+   [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
+
+Not claimed: exact average-linkage HAC on GPU; matching waterz fragment IDs;
+`min_size` or merge-from-a-precomputed-RAG in the public API.
 
 ## Install
 

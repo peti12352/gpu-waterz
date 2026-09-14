@@ -2,7 +2,7 @@
 """W0: a CPU replica of the csrc/ws.cu watershed, to serve as the bit-identity
 gate for W1-W4 on a machine with no GPU.
 
-Why this exists. The plan gates every watershed change on "bit-identical" or on
+Why this exists. Quality gates every watershed change on "bit-identical" or on
 `nfrag == 2175400` and `np.array_equal` against the current watershed. Both of
 those need a card. `scripts/g0_agg_ref.py` showed the way out for the
 agglomeration half: a faithful CPU replica turns a GPU gate into a CPU gate, and
@@ -12,17 +12,15 @@ move for the watershed.
 SCOPE, and a warning. ws.cu contains THREE watershed implementations, and this
 file models the two older ones, not the one in production:
 
-  `plateau_basins`   ws.cu:703, reached via watershed_gpu. Commented "Exact S1
-                     plateau+basin on host (G2-locked)". Sequential; mutates
-                     seg in place as the plateau BFS runs. Only caller in the
-                     tree is scripts/g2_ws.py.
+  `plateau_basins`   ws.cu:703, reached via watershed_gpu. Sequential;
+                     mutates seg in place as the plateau BFS runs.
   `watershed_device` ws.cu:603, reached via watershed_gpu_d. k_flow, then a
                      compact-frontier plateau BFS, then a union-find over the
                      rewritten direction field, reading an immutable `orig`.
   `watershed_gpu_e9` ws.cu:1796/1965, e9b_divide_d + e9c_basins_d with
                      k_hook_bidir / k_hook_remain. THIS is what src/segment.py
-                     calls from both segment() and segment_d(), so this is what
-                     produced data/cache/gpu_fragments.npy and nfrag=2175400.
+                     calls from both segment() and segment_d(); nfrag=2175400
+                     on CREMI-A val.
 
 All three are replicated here, and diffing them gives a useful result:
 `plateau_basins` is an exact specification of e9, identical partitions on
@@ -666,12 +664,11 @@ def uf_rounds(n: int, ei: np.ndarray, ej: np.ndarray) -> int:
     this is an upper bound on its count, but it scales the same way, which is
     the question being asked.
 
-    Why it matters: the plan's whole scaling argument is that "iteration counts
-    stay constant" while bytes scale 12x. That is measured and true for
-    agglomeration, because make_big.py mirror-tiles the volume so the graph is
-    12 disjoint copies. It cannot be true for a union-find, whose round count
-    grows with the longest chain it has to collapse, and the graded volume is
-    3x2x2 tiles of val, so chains that ran along an axis get up to 3x longer.
+    Why it matters: agglomeration iteration counts stay roughly constant while
+    bytes scale 12x when the volume is mirror-tiled (the graph is 12 disjoint
+    copies). That cannot be true for a union-find, whose round count grows with
+    the longest chain it has to collapse, and a 3x2x2 tiling of val makes
+    chains that ran along an axis up to 3x longer.
     """
     parent = np.arange(n, dtype=np.int64)
     rounds = 0
@@ -1035,7 +1032,7 @@ def e9_watershed(bits: np.ndarray, Z: int, Y: int, X: int,
 
 
 # --------------------------------------------------------------------------
-# W1: 2x2x2 block-based labelling, and whether the plan's version is sound
+# W1: 2x2x2 block-based labelling
 # --------------------------------------------------------------------------
 
 def block_ids(Z: int, Y: int, X: int) -> tuple[np.ndarray, int]:
@@ -1073,8 +1070,7 @@ def w1_block_check(bits: np.ndarray, Z: int, Y: int, X: int,
     voxel   one parent slot per voxel. This is what ws.cu does today and is by
             definition the right answer.
     naive   one label per 2x2x2 block, unioning blocks whenever any edge
-            crosses between them. This is W1 as the plan words it: "one uint32
-            label per 8 voxels", 0.5 B/vox.
+            crosses between them. One uint32 label per 8 voxels, 0.5 B/vox.
     slots   one slot per intra-block connectivity class. Exact by construction,
             because it is the same union-find on the same edges with the parent
             array merely indexed differently. The open question for this one is

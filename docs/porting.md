@@ -32,11 +32,11 @@ On 2.16 Gvox:
 
 | Fact | Number | Source |
 |---|---|---|
-| Naive fused WS working set | ~42 GiB | `d1_mem.py` / SOURCES S40 |
-| Legal stack WS peak (z-slab) | **13.22 GiB** | N17_DEEP |
-| `SHARE_OFF=1` extra | +4 B/vox | ATLAS |
+| Naive fused WS working set | ~42 GiB | fused buffers, no z-slab |
+| Legal stack WS peak (z-slab) | **13.22 GiB** | pin stack, N=3 slabs |
+| `SHARE_OFF=1` extra | +4 B/vox | measured on the pin card |
 | Affinity uint8 + labels uint32 | 6.5 + 8.6 GiB | input/output only |
-| 8-tile serial fallback | 8.3x slower; dead | ATLAS |
+| 8-tile serial fallback | 8.3x slower; dead | lab notes |
 
 OOM fit path is **z-slab N=3** (slab Z=125, aff=0 seams), not more serial
 tiles. `FOLD` without `SHARE_OFF` broke basins (89% voxels differed);
@@ -96,8 +96,8 @@ partition or do not close 1680 ms. See [lab.md](../notes/lab.md).
 ## 5. Checklist on a new card
 
 1. Add SM, rebuild, `cuda_libs_ready()`.
-2. CREMI-A val four-T (`bash scripts/legal_eval.sh`) and fragment identity
-   vs `wz_fragments.npy` if you have it.
+2. CREMI-A val four-T (`bash scripts/legal_eval.sh`) and two-run
+   fragment identity.
 3. Record `nvidia-smi` name, driver, VRAM, `ws_peak`.
 4. Idle, parks off, CUDA-event e2e on the volume you care about.
 5. nsys owners vs the table above.

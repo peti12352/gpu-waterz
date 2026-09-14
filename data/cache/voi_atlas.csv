@@ -1,114 +1,114 @@
 algorithm_class,probe_id,param,T,voi_split,voi_merge,nseg,wall_s,task_legal,fail_mode,note_path
-frozen_cc,X0,mean>T,0.2,,7.78,279468,,False,giant,notes/LOG.md#x0-fail
-frozen_cc,X0,mean>T,0.3,,7.55,309454,,False,giant,notes/LOG.md#x0-fail
-frozen_cc,X0,mean>T,0.4,,6.43,330578,,False,giant,notes/LOG.md#x0-fail
-frozen_cc,X0,mean>T,0.5,,4.61,355268,,False,giant,notes/LOG.md#x0-fail
-waterfall,W31,lowest-pass mean>T,0.2,,7.78,279468,,False,giant,notes/LOG.md#w31-fail
-waterfall,W31,lowest-pass mean>T,0.3,,7.55,309454,,False,giant,notes/LOG.md#w31-fail
-waterfall,W31,lowest-pass mean>T,0.4,,6.43,330578,,False,giant,notes/LOG.md#w31-fail
-waterfall,W31,lowest-pass mean>T,0.5,,4.61,355268,,False,giant,notes/LOG.md#w31-fail
-union_all_in_band,X1,B=16,0.3,,3.04,,,False,giant,notes/LOG.md#x1-fail-all-b
-union_all_in_band,X1,B=64,0.3,,1.04,,,False,giant,notes/LOG.md#x1-fail-all-b
-union_all_in_band,X1,B=256,0.3,,0.328,,,False,giant,notes/LOG.md#x1-fail-all-b
-union_all_in_band,X1,B=1024,0.2,,0.498,,,False,giant,notes/LOG.md#x1-fail-all-b
-union_all_in_band,X1,B=1024,0.3,,0.2724,,,False,giant,notes/LOG.md#x1-fail-all-b
-mutual_in_bucket,X1b,B=16,all,2,,1050000,,False,under_merge,notes/LOG.md#x1b-fail
-mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.2,0.9097,0.2033,421990,13.081,False,under_merge,notes/LOG.md#m16-fail
-mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.3,0.9097,0.2033,421990,13.081,False,under_merge,notes/LOG.md#m16-fail
-mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.4,0.9097,0.2033,421990,13.081,False,under_merge,notes/LOG.md#m16-fail
-mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.5,0.9097,0.2033,422041,13.081,False,under_merge,notes/LOG.md#m16-fail
-mutex_hop,M16b,"hop-k in {2,4,8}",all,2.129,,883000,153.241,False,under_merge,notes/LOG.md#m16b-fail
-kruskal_sdsl,N12,frozen SDSL,all,2.94,0,,6.092,False,under_merge,notes/N12_OFF.md
-parhac_eps,N12,eps=0.5,0.3,0.4345,0.2712,,0.461,False,order_change,notes/N12_OFF.md
-parhac_eps,N12,eps=0.8,0.3,0.4323,0.3058,,0.155,False,order_change,notes/N12_OFF.md
-parhac_eps,N12,eps=1.0,0.3,0.4225,0.376,,0.143,False,order_change,notes/N12_OFF.md
-parhac_eps,N12,eps=2.0,0.3,0.449,0.8735,,0.13,False,order_change,notes/N12_OFF.md
-sdsl_size_cap,Z25,S0=64,0.2,1.616,0.201,,,False,under_merge,notes/LOG.md#z25-fail-all-s0
-sdsl_size_cap,Z25,S0=256,0.2,1.05,0.23,,,False,under_merge,notes/LOG.md#z25-fail-all-s0
-sdsl_size_cap,Z25,S0=1024,0.2,0.779,0.252,,,False,under_merge,notes/LOG.md#z25-fail-all-s0
-sdsl_size_cap,Z25,S0=4096,0.2,0.663,0.27,,,False,both_halves,notes/LOG.md#z25-fail-all-s0
-sdsl_size_cap,Z25,S0=16384,0.2,0.583,0.302,,,False,both_halves,notes/LOG.md#z25-fail-all-s0
-fh_mint,F23,k=50,0.2,2.208,0.191,,,False,under_merge,notes/LOG.md#f23-fail-all-k
-fh_mint,F23,k=200,0.2,2.049,0.213,,,False,under_merge,notes/LOG.md#f23-fail-all-k
-fh_mint,F23,k=2000,0.2,1.521,0.499,,,False,both_halves,notes/LOG.md#f23-fail-all-k
-srm,R24,Q=16,0.2,1.148,3.261,,,False,both_halves,notes/LOG.md#r24-fail-all-q
-srm,R24,Q=256,0.2,1.504,1.623,,,False,both_halves,notes/LOG.md#r24-fail-all-q
-soille,S26,omega=0.05,0.2,0.42,2.876,,,False,giant,notes/LOG.md#s26-fail-all-omega
-soille,S26,omega=0.1,0.2,1.126,0.359,,,False,both_halves,notes/LOG.md#s26-fail-all-omega
-union_all_size_cap,C28,B=16 Smax=1024,0.2,0.341,3.109,,,False,giant,notes/LOG.md#c28-fail-all-bsmax
-union_all_size_cap,C28,B=32 Smax=4096,0.2,0.437,1.263,,,False,giant,notes/LOG.md#c28-fail-all-bsmax
-relative_contact,R32,gamma=0.10 alpha=0.67,0.2,0.427,0.3451,280195,,False,both_halves,notes/LOG.md#r32-fail
-relative_contact,R32,gamma=0.10 alpha=0.67,0.3,0.4618,0.2792,310243,,False,both_halves,notes/LOG.md#r32-fail
-relative_contact,R32,gamma=0.10 alpha=0.67,0.4,0.4891,0.257,331405,,False,both_halves,notes/LOG.md#r32-fail
-relative_contact,R32,gamma=0.10 alpha=0.67,0.5,0.5304,0.235,356087,,False,both_halves,notes/LOG.md#r32-fail
-relative_contact,R36,gamma=0.05 alpha=0.67,0.2,0.387,0.4421,,,False,giant,notes/LOG.md#r36-fail
-leftover_s4,L33,S0=4096,0.2,0.3076,1.093,279793,,False,giant,notes/LOG.md#l33-fail-all-s0
-leftover_s4,L33,S0=1024,0.2,0.2714,1.88,,,False,giant,notes/LOG.md#l33-fail-all-s0
-leftover_s4,L33,S0=256,0.2,0.1968,4.455,,,False,giant,notes/LOG.md#l33-fail-all-s0
-leftover_s4,L36,gamma=0.1 residual,0.2,0.3486,0.5242,,,False,giant,notes/LOG.md#l36-fail-both-gamma
-leftover_s4,L36,gamma=0.05 residual,0.2,0.3443,0.5089,,,False,giant,notes/LOG.md#l36-fail-both-gamma
-block_kruskal,B34,32x128x128 then residual,0.2,0.1272,7.718,,,False,giant,notes/LOG.md#b34-fail
-lu_freeze_naive,B34,5-level freeze (not Alg2 paper),0.2,0.12,7.778,,,False,giant,notes/LOG.md#b34-fail
-hysteresis,V35,high=0.9 low=T,0.2,1.09,7.424,9420000,,False,both_halves,notes/LOG.md#v35-fail
-hem,H30,size-doubling 20 rounds,0.2,2.374,0.201,917000,82.5,False,under_merge,notes/LOG.md#h30-fail
-boruvka_onesided,E5,PLAN 3.4,0.2,,0.3885,282829,,False,giant,notes/LOG.md#e5-accuracy-gate-pass
-boruvka_onesided,E5,PLAN 3.4,0.3,,0.2779,312939,,False,giant,notes/LOG.md#e5-accuracy-gate-pass
-boruvka_onesided,E5,PLAN 3.4,0.4,,0.2423,334450,,False,giant,notes/LOG.md#e5-accuracy-gate-pass
-extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.2,0.3852,0.4214,294248,588,False,not_S1_fragments,notes/LOG.md#e1-fail-taskmd-voi
-extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.3,0.4591,0.2896,322078,588,False,not_S1_fragments,notes/LOG.md#e1-fail-taskmd-voi
-extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.4,0.5232,0.2469,345380,588,False,not_S1_fragments,notes/LOG.md#e1-fail-taskmd-voi
-extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.5,0.613,0.2272,380406,588,True,pass,notes/LOG.md#e1-fail-taskmd-voi
-parhac_eps,E2,eps=1.0 matching-only,0.2,0.3856,0.3729,,278,False,order_change,notes/LOG.md#e2-paper-eps-on-y2-matching-cached-host-rag-7505458-edges
-parhac_eps,N18_B2,eps=0.41,0.3,0.447593399153566,0.273908980571614,321902,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.42,0.3,0.442437063233853,0.274831819062554,321894,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.43,0.3,0.440457142389158,0.273057552121225,321886,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.44,0.3,0.436320565835399,0.272533535346161,321864,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.45,0.3,0.436534984240194,0.265289925314013,321757,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.46,0.3,0.441252048821059,0.275816107779692,321751,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.47,0.3,0.441295903754813,0.291468879910587,321416,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.48,0.3,0.442194720047037,0.289179561002122,321859,,False,order_change,notes/N18_B2.md
-parhac_eps,N18_B2,eps=0.49,0.3,0.445158514673339,0.277437494467174,321844,,False,order_change,notes/N18_B2.md
-nng_filter,N19_H2,7.5M->1.8M edges,0.3,2.14842210132287,0.192010974834094,643680,0.325333934277296,False,order_change,notes/N19_H2.md
-gasp_average,N19_X2,cached RAG,0.3,0.154995062052538,7.55185762847357,309454,3.92259516613558,False,giant,notes/N19_X2.md
-bin_ladder,N19_H1,uint8 bins Luengo,0.3,,,,5.841,False,timeout,notes/N19_H1.md
-pruf_grayscale,N12_OFF,Meyer PRUF3D,n/a,,,,3.75,False,not_S1_fragments,notes/N12_OFF.md
-pruf_affinity,N19_X1,no integration,n/a,,,,,False,not_S1_fragments,notes/N19_X1.md
-rama,N13_L5,signed multicut 600s,n/a,,,,600,False,timeout,notes/N13_RAMA.md
-rama,N19_X3,60s abort,n/a,,,,60,False,timeout,notes/N19_X3.md
-terahac,T14,cap=0 then 16384,n/a,,,,360,False,timeout,notes/LOG.md#t14-killed-y1-class
-lu_chunk_simplified,N19_H4,parents vs ParHAC,n/a,,,,,False,order_change,notes/N19_H4.md
-parhac_legal,Y2,eps=0.01,0.2,,,294231,501,True,pass,notes/LOG.md#y2-pass
-parhac_legal,Y2,eps=0.01,0.3,,,322089,501,True,pass,notes/LOG.md#y2-pass
-parhac_legal,Y2,eps=0.01,0.4,,,345229,501,True,pass,notes/LOG.md#y2-pass
-parhac_legal,Y2,eps=0.01,0.5,,,379772,501,True,pass,notes/LOG.md#y2-pass
-parhac_legal,E2,eps=0.10 matching,0.2,0.3817,0.3381,,396,True,pass,notes/LOG.md#e2-paper-eps-on-y2-matching-cached-host-rag-7505458-edges
-parhac_legal,E2,eps=0.10 matching,0.3,0.4567,0.2422,,396,True,pass,notes/LOG.md#e2-paper-eps-on-y2-matching-cached-host-rag-7505458-edges
-parhac_legal,E2,eps=0.10 matching,0.4,0.518,0.2185,,396,True,pass,notes/LOG.md#e2-paper-eps-on-y2-matching-cached-host-rag-7505458-edges
-parhac_legal,E2,eps=0.10 matching,0.5,0.6207,0.2093,,396,True,pass,notes/LOG.md#e2-paper-eps-on-y2-matching-cached-host-rag-7505458-edges
-parhac_legal,N16_DEEP,eps=0.08 four-T,0.2,0.370698,0.335006,,,True,pass,notes/N16_DEEP.md
-parhac_legal,N16_DEEP,eps=0.08 four-T,0.3,0.451219,0.250531,,,True,pass,notes/N16_DEEP.md
-parhac_legal,N16_DEEP,eps=0.08 four-T,0.4,0.516214,0.226759,,,True,pass,notes/N16_DEEP.md
-parhac_legal,N16_DEEP,eps=0.08 four-T,0.5,0.61294,0.218363,,,True,pass,notes/N16_DEEP.md
+frozen_cc,X0,mean>T,0.2,,7.78,279468,,False,giant,notes/lab.md
+frozen_cc,X0,mean>T,0.3,,7.55,309454,,False,giant,notes/lab.md
+frozen_cc,X0,mean>T,0.4,,6.43,330578,,False,giant,notes/lab.md
+frozen_cc,X0,mean>T,0.5,,4.61,355268,,False,giant,notes/lab.md
+waterfall,W31,lowest-pass mean>T,0.2,,7.78,279468,,False,giant,notes/lab.md
+waterfall,W31,lowest-pass mean>T,0.3,,7.55,309454,,False,giant,notes/lab.md
+waterfall,W31,lowest-pass mean>T,0.4,,6.43,330578,,False,giant,notes/lab.md
+waterfall,W31,lowest-pass mean>T,0.5,,4.61,355268,,False,giant,notes/lab.md
+union_all_in_band,X1,B=16,0.3,,3.04,,,False,giant,notes/lab.md
+union_all_in_band,X1,B=64,0.3,,1.04,,,False,giant,notes/lab.md
+union_all_in_band,X1,B=256,0.3,,0.328,,,False,giant,notes/lab.md
+union_all_in_band,X1,B=1024,0.2,,0.498,,,False,giant,notes/lab.md
+union_all_in_band,X1,B=1024,0.3,,0.2724,,,False,giant,notes/lab.md
+mutual_in_bucket,X1b,B=16,all,2,,1050000,,False,under_merge,notes/lab.md
+mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.2,0.9097,0.2033,421990,13.081,False,under_merge,notes/lab.md
+mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.3,0.9097,0.2033,421990,13.081,False,under_merge,notes/lab.md
+mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.4,0.9097,0.2033,421990,13.081,False,under_merge,notes/lab.md
+mutex_absmax,M16,Wolf Alg2 / GASP AbsMax,0.5,0.9097,0.2033,422041,13.081,False,under_merge,notes/lab.md
+mutex_hop,M16b,"hop-k in {2,4,8}",all,2.129,,883000,153.241,False,under_merge,notes/lab.md
+kruskal_sdsl,N12,frozen SDSL,all,2.94,0,,6.092,False,under_merge,notes/lab.md
+parhac_eps,N12,eps=0.5,0.3,0.4345,0.2712,,0.461,False,order_change,notes/lab.md
+parhac_eps,N12,eps=0.8,0.3,0.4323,0.3058,,0.155,False,order_change,notes/lab.md
+parhac_eps,N12,eps=1.0,0.3,0.4225,0.376,,0.143,False,order_change,notes/lab.md
+parhac_eps,N12,eps=2.0,0.3,0.449,0.8735,,0.13,False,order_change,notes/lab.md
+sdsl_size_cap,Z25,S0=64,0.2,1.616,0.201,,,False,under_merge,notes/lab.md
+sdsl_size_cap,Z25,S0=256,0.2,1.05,0.23,,,False,under_merge,notes/lab.md
+sdsl_size_cap,Z25,S0=1024,0.2,0.779,0.252,,,False,under_merge,notes/lab.md
+sdsl_size_cap,Z25,S0=4096,0.2,0.663,0.27,,,False,both_halves,notes/lab.md
+sdsl_size_cap,Z25,S0=16384,0.2,0.583,0.302,,,False,both_halves,notes/lab.md
+fh_mint,F23,k=50,0.2,2.208,0.191,,,False,under_merge,notes/lab.md
+fh_mint,F23,k=200,0.2,2.049,0.213,,,False,under_merge,notes/lab.md
+fh_mint,F23,k=2000,0.2,1.521,0.499,,,False,both_halves,notes/lab.md
+srm,R24,Q=16,0.2,1.148,3.261,,,False,both_halves,notes/lab.md
+srm,R24,Q=256,0.2,1.504,1.623,,,False,both_halves,notes/lab.md
+soille,S26,omega=0.05,0.2,0.42,2.876,,,False,giant,notes/lab.md
+soille,S26,omega=0.1,0.2,1.126,0.359,,,False,both_halves,notes/lab.md
+union_all_size_cap,C28,B=16 Smax=1024,0.2,0.341,3.109,,,False,giant,notes/lab.md
+union_all_size_cap,C28,B=32 Smax=4096,0.2,0.437,1.263,,,False,giant,notes/lab.md
+relative_contact,R32,gamma=0.10 alpha=0.67,0.2,0.427,0.3451,280195,,False,both_halves,notes/lab.md
+relative_contact,R32,gamma=0.10 alpha=0.67,0.3,0.4618,0.2792,310243,,False,both_halves,notes/lab.md
+relative_contact,R32,gamma=0.10 alpha=0.67,0.4,0.4891,0.257,331405,,False,both_halves,notes/lab.md
+relative_contact,R32,gamma=0.10 alpha=0.67,0.5,0.5304,0.235,356087,,False,both_halves,notes/lab.md
+relative_contact,R36,gamma=0.05 alpha=0.67,0.2,0.387,0.4421,,,False,giant,notes/lab.md
+leftover_s4,L33,S0=4096,0.2,0.3076,1.093,279793,,False,giant,notes/lab.md
+leftover_s4,L33,S0=1024,0.2,0.2714,1.88,,,False,giant,notes/lab.md
+leftover_s4,L33,S0=256,0.2,0.1968,4.455,,,False,giant,notes/lab.md
+leftover_s4,L36,gamma=0.1 residual,0.2,0.3486,0.5242,,,False,giant,notes/lab.md
+leftover_s4,L36,gamma=0.05 residual,0.2,0.3443,0.5089,,,False,giant,notes/lab.md
+block_kruskal,B34,32x128x128 then residual,0.2,0.1272,7.718,,,False,giant,notes/lab.md
+lu_freeze_naive,B34,5-level freeze (not Alg2 paper),0.2,0.12,7.778,,,False,giant,notes/lab.md
+hysteresis,V35,high=0.9 low=T,0.2,1.09,7.424,9420000,,False,both_halves,notes/lab.md
+hem,H30,size-doubling 20 rounds,0.2,2.374,0.201,917000,82.5,False,under_merge,notes/lab.md
+boruvka_onesided,E5,live-mean Boruvka,0.2,,0.3885,282829,,False,giant,notes/lab.md
+boruvka_onesided,E5,live-mean Boruvka,0.3,,0.2779,312939,,False,giant,notes/lab.md
+boruvka_onesided,E5,live-mean Boruvka,0.4,,0.2423,334450,,False,giant,notes/lab.md
+extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.2,0.3852,0.4214,294248,588,False,not_S1_fragments,notes/lab.md
+extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.3,0.4591,0.2896,322078,588,False,not_S1_fragments,notes/lab.md
+extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.4,0.5232,0.2469,345380,588,False,not_S1_fragments,notes/lab.md
+extra_plateau_cc,E1,GPU UF nfrag+1.6pct,0.5,0.613,0.2272,380406,588,True,pass,notes/lab.md
+parhac_eps,E2,eps=1.0 matching-only,0.2,0.3856,0.3729,,278,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.41,0.3,0.447593399153566,0.273908980571614,321902,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.42,0.3,0.442437063233853,0.274831819062554,321894,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.43,0.3,0.440457142389158,0.273057552121225,321886,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.44,0.3,0.436320565835399,0.272533535346161,321864,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.45,0.3,0.436534984240194,0.265289925314013,321757,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.46,0.3,0.441252048821059,0.275816107779692,321751,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.47,0.3,0.441295903754813,0.291468879910587,321416,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.48,0.3,0.442194720047037,0.289179561002122,321859,,False,order_change,notes/lab.md
+parhac_eps,N18_B2,eps=0.49,0.3,0.445158514673339,0.277437494467174,321844,,False,order_change,notes/lab.md
+nng_filter,N19_H2,7.5M->1.8M edges,0.3,2.14842210132287,0.192010974834094,643680,0.325333934277296,False,order_change,notes/lab.md
+gasp_average,N19_X2,cached RAG,0.3,0.154995062052538,7.55185762847357,309454,3.92259516613558,False,giant,notes/lab.md
+bin_ladder,N19_H1,uint8 bins Luengo,0.3,,,,5.841,False,timeout,notes/lab.md
+pruf_grayscale,N12_OFF,Meyer PRUF3D,n/a,,,,3.75,False,not_S1_fragments,notes/lab.md
+pruf_affinity,N19_X1,no integration,n/a,,,,,False,not_S1_fragments,notes/lab.md
+rama,N13_L5,signed multicut 600s,n/a,,,,600,False,timeout,notes/lab.md
+rama,N19_X3,60s abort,n/a,,,,60,False,timeout,notes/lab.md
+terahac,T14,cap=0 then 16384,n/a,,,,360,False,timeout,notes/lab.md
+lu_chunk_simplified,N19_H4,parents vs ParHAC,n/a,,,,,False,order_change,notes/lab.md
+parhac_legal,Y2,eps=0.01,0.2,,,294231,501,True,pass,notes/lab.md
+parhac_legal,Y2,eps=0.01,0.3,,,322089,501,True,pass,notes/lab.md
+parhac_legal,Y2,eps=0.01,0.4,,,345229,501,True,pass,notes/lab.md
+parhac_legal,Y2,eps=0.01,0.5,,,379772,501,True,pass,notes/lab.md
+parhac_legal,E2,eps=0.10 matching,0.2,0.3817,0.3381,,396,True,pass,notes/lab.md
+parhac_legal,E2,eps=0.10 matching,0.3,0.4567,0.2422,,396,True,pass,notes/lab.md
+parhac_legal,E2,eps=0.10 matching,0.4,0.518,0.2185,,396,True,pass,notes/lab.md
+parhac_legal,E2,eps=0.10 matching,0.5,0.6207,0.2093,,396,True,pass,notes/lab.md
+parhac_legal,N16_DEEP,eps=0.08 four-T,0.2,0.370698,0.335006,,,True,pass,notes/lab.md
+parhac_legal,N16_DEEP,eps=0.08 four-T,0.3,0.451219,0.250531,,,True,pass,notes/lab.md
+parhac_legal,N16_DEEP,eps=0.08 four-T,0.4,0.516214,0.226759,,,True,pass,notes/lab.md
+parhac_legal,N16_DEEP,eps=0.08 four-T,0.5,0.61294,0.218363,,,True,pass,notes/lab.md
 parhac_legal,N19_I0_REPRO,eps=0.40 T=0.3 speed,0.3,0.440822694081453,0.254274778297669,321855,,True,pass,data/cache/N19_I0_REPRO.json
-rac,Y1,exact RAC,0.2,,,294231,536,True,pass,notes/LOG.md#y1-pass--too-serial
-quantile_binqueue,Q20,Q=50 bins=256,0.2,,,294518,,True,pass,notes/LOG.md#q20-pass-serial-not-a-g6-lock
-heap_s4,E4,stock waterz S4,0.2,0.375447,0.32989,294518,162,True,pass,notes/LOG.md#e4-pass
-heap_s4,E4,stock waterz S4,0.3,0.452148,0.242154,322167,162,True,pass,notes/LOG.md#e4-pass
-heap_s4,E4,stock waterz S4,0.4,0.517995,0.217998,345376,162,True,pass,notes/LOG.md#e4-pass
-heap_s4,E4,stock waterz S4,0.5,0.610281,0.209424,379876,162,True,pass,notes/LOG.md#e4-pass
-complete_link,N20_X4,min-of-means CPU heap,0.2,1.295968,0.213121,342758,,False,under_merge,notes/N20_X4.md
-complete_link,N20_X4,min-of-means CPU heap,0.3,1.349673,0.203557,377918,,False,under_merge,notes/N20_X4.md
-complete_link,N20_X4,min-of-means CPU heap,0.4,1.406606,0.198141,408304,,False,under_merge,notes/N20_X4.md
-complete_link,N20_X4,min-of-means CPU heap,0.5,1.482438,0.193782,447138,1641.5,False,under_merge,notes/N20_X4.md
-wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.2,0.767215,0.268408,299459,,False,under_merge,notes/N20_X5.md
-wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.3,0.893815,0.218193,336318,,False,under_merge,notes/N20_X5.md
-wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.4,1.017719,0.206736,372557,,False,under_merge,notes/N20_X5.md
-wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.5,1.129724,0.200797,413052,1870.5,False,under_merge,notes/N20_X5.md
-rnn_s3,N20_RNN,S3 RNN cap=5000,0.2,0.855889,0.214365,424568,1116.2,False,under_merge,notes/N20_RNN.md
-rnn_s3,N20_RNN,S3 RNN cap=5000,0.3,0.863388,0.208704,437746,,False,under_merge,notes/N20_RNN.md
-rnn_s3,N20_RNN,S3 RNN cap=5000,0.4,0.879412,0.205178,451822,,False,under_merge,notes/N20_RNN.md
-rnn_s3,N20_RNN,S3 RNN cap=5000,0.5,0.929291,0.201079,475631,,False,under_merge,notes/N20_RNN.md
-lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.2,0.372129,0.349185,294231,6645.3,True,pass,notes/N20_LU2.md
-lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.3,0.452448,0.242274,322099,,True,pass,notes/N20_LU2.md
-lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.4,0.518023,0.218028,345243,,True,pass,notes/N20_LU2.md
-lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.5,0.610254,0.209481,379805,,True,pass,notes/N20_LU2.md
+rac,Y1,exact RAC,0.2,,,294231,536,True,pass,notes/lab.md
+quantile_binqueue,Q20,Q=50 bins=256,0.2,,,294518,,True,pass,notes/lab.md
+heap_s4,E4,stock waterz S4,0.2,0.375447,0.32989,294518,162,True,pass,notes/lab.md
+heap_s4,E4,stock waterz S4,0.3,0.452148,0.242154,322167,162,True,pass,notes/lab.md
+heap_s4,E4,stock waterz S4,0.4,0.517995,0.217998,345376,162,True,pass,notes/lab.md
+heap_s4,E4,stock waterz S4,0.5,0.610281,0.209424,379876,162,True,pass,notes/lab.md
+complete_link,N20_X4,min-of-means CPU heap,0.2,1.295968,0.213121,342758,,False,under_merge,notes/lab.md
+complete_link,N20_X4,min-of-means CPU heap,0.3,1.349673,0.203557,377918,,False,under_merge,notes/lab.md
+complete_link,N20_X4,min-of-means CPU heap,0.4,1.406606,0.198141,408304,,False,under_merge,notes/lab.md
+complete_link,N20_X4,min-of-means CPU heap,0.5,1.482438,0.193782,447138,1641.5,False,under_merge,notes/lab.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.2,0.767215,0.268408,299459,,False,under_merge,notes/lab.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.3,0.893815,0.218193,336318,,False,under_merge,notes/lab.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.4,1.017719,0.206736,372557,,False,under_merge,notes/lab.md
+wpgma,N20_X5,WPGMA 1/2+1/2 CPU heap,0.5,1.129724,0.200797,413052,1870.5,False,under_merge,notes/lab.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.2,0.855889,0.214365,424568,1116.2,False,under_merge,notes/lab.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.3,0.863388,0.208704,437746,,False,under_merge,notes/lab.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.4,0.879412,0.205178,451822,,False,under_merge,notes/lab.md
+rnn_s3,N20_RNN,S3 RNN cap=5000,0.5,0.929291,0.201079,475631,,False,under_merge,notes/lab.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.2,0.372129,0.349185,294231,6645.3,True,pass,notes/lab.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.3,0.452448,0.242274,322099,,True,pass,notes/lab.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.4,0.518023,0.218028,345243,,True,pass,notes/lab.md
+lu_alg2_spatial,N20_LU2,spatial B^C freeze + residual heap,0.5,0.610254,0.209481,379805,,True,pass,notes/lab.md

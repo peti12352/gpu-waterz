@@ -1,4 +1,4 @@
-// Device paper-ParHAC ContractLayer, waterz contact-mean, ε=0.08.
+// Device paper-ParHAC ContractLayer, waterz contact-mean, eps=0.08.
 // Live-subgraph compact + combine. Same control flow as parhac_paper_cpu.
 #include <cuda_runtime.h>
 #include <nvtx3/nvToolsExt.h>
@@ -1142,7 +1142,7 @@ __global__ void k_pack_amask(const uint8_t* amask, const int64_t* ct,
 }
 
 // N21 A2: listed rebuild. keep is a packed-this-inner flag (0/1), not the
-// rewrite keep bit: caller zeros it on old alist ∪ emit holes first.
+// rewrite keep bit: caller zeros it on old alist or emit holes first.
 __global__ void k_keep_zero_listed(const uint32_t* idx, int n, uint8_t* keep)
 {
     int t = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2427,7 +2427,7 @@ static bool fuse_dirty() {
     return cached != 0;
 }
 
-// N15 exp8: keep sz0 from the first outer of the layer. ε stays 0.40.
+// N15 exp8: keep sz0 from the first outer of the layer. eps stays 0.40.
 static bool sticky_sz0() {
     static int cached = -1;
     if (cached < 0) {
@@ -2525,7 +2525,7 @@ static bool listed_insert() {
     return cached != 0;
 }
 
-// N21 A2: rebuild/pack from old alist ∪ emit holes. Default off.
+// N21 A2: rebuild/pack from old alist or emit holes. Default off.
 // Requires fuse + EMIT_HOLES so holes are keep-survivors and vacated
 // self-loops can drop amask in k_rewrite_dirty_fuse. Not FUSE_PACK.
 static bool listed_rebuild() {

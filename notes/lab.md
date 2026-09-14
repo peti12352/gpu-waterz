@@ -4,8 +4,7 @@ Library docs: [README](../README.md), [usage](../docs/usage.md),
 [decode](../docs/decode.md), [porting](../docs/porting.md),
 [citations](../docs/citations.md).
 
-Leftover work and closed attacks. Campaign probes and dead kernels live
-in local `archive/` (gitignored).
+Leftover work and closed attacks.
 
 ## Pin (idle RTX 5090)
 

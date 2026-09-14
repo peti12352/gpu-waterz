@@ -231,7 +231,7 @@ def _watershed(aff_u8, low, high):
 
 
 # Measured on val: 7505458 edges from 180 Mvox = 0.0417 edges/voxel.
-# Official fused 2.16 Gvox: 90 323 139 / 2.16e9 = 0.0418. 0.043 is 2.8%
+# Fused 2.16 Gvox: 90 323 139 / 2.16e9 = 0.0418. 0.043 is 2.8%
 # headroom over that table. rag.cu sizes its hash as next_pow2(2*max_edges)*16 B;
 # at 2.16 Gvox both 0.043 and 0.055 stay at 2^28 slots (4.29 GiB). The cap
 # only shrinks the edge arrays, not the table. Overflow is -1, not silent.
@@ -287,9 +287,9 @@ def _heap(u, v, sm, ct, thresholds, max_id):
 
 
 def _agg_eps(thresholds=None, default=0.08):
-    """Accuracy path stays ε=0.08. Speed path (single T=0.3) defaults to 0.40.
+    """Accuracy path stays eps=0.08. Speed path (single T=0.3) defaults to 0.40.
 
-    Four-T VOI is illegal above 0.08 (N2). T=0.3-only ε=0.32/0.40 already
+    Four-T VOI is illegal above 0.08 (N2). T=0.3-only eps=0.32/0.40 already
     PASSed N2. WATERZ_AGG_EPS overrides either default when set.
     """
     s = os.environ.get("WATERZ_AGG_EPS")

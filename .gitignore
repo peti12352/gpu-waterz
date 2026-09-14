@@ -13,9 +13,7 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 notes/*.log
-# PDFs, clones, txt extracts. What we concluded: docs/citations.md
 papers/
-# Campaign probes, dead kernels, per-trial notes (local fossil)
 archive/
 tmp_sync/
 .cuda-nvrtc*

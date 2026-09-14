@@ -1,7 +1,6 @@
 # scripts/
 
-Product entry points and CPU replicas. Campaign probes live in local
-`archive/scripts/` (gitignored).
+Product entry points and CPU replicas.
 
 | Script | What it does |
 |---|---|

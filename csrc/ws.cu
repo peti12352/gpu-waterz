@@ -216,7 +216,7 @@ static bool sort_pack() {
     return cached != 0;
 }
 
-// N18 A2: dense-remap plateau roots for vcount histogram (nvox -> U≤nC).
+// N18 A2: dense-remap plateau roots for vcount histogram (nvox -> U<=nC).
 // Default off. Process-cached; subprocess per env.
 static bool vcount_compact() {
     static int cached = -1;
@@ -4038,7 +4038,7 @@ __global__ void k_offset_labels(uint32_t* seg, int64_t n, uint32_t off)
 }
 
 // k_indep_bfs follows bits with no OOB test. Full-volume k_flow can leave a
-// ±z bit on a slab face that points at the neighbouring tile; BFS then walks
+// +/-z bit on a slab face that points at the neighbouring tile; BFS then walks
 // out of the slab, into already-rewritten bits, and overflows the queue.
 __global__ void k_clear_slab_z_faces(uint8_t* bits, int64_t Z, int64_t Y, int64_t X)
 {
@@ -4049,7 +4049,7 @@ __global__ void k_clear_slab_z_faces(uint8_t* bits, int64_t Z, int64_t Y, int64_
     bits[(Z - 1) * yx + i] &= (uint8_t)~0x08;  // z=Z-1: drop +z
 }
 
-// Official make_big 3x2x2 is [375,2400,2400]. Each z-tile is 125 and the
+// 2.16 Gvox 3x2x2 is [375,2400,2400]. Each z-tile is 125 and the
 // z-seam affinity is identically 0 (P1), so e9b/e9c on a tile is the same
 // partition as the fused volume. E4 stitch is vacuous on those seams.
 // Scratch is one tile, not 3, which is how 2.16 fits in 24 GiB.

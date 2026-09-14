@@ -64,3 +64,10 @@ is merge-from-fragments. Our `agglomerate` name matches stock waterz (full
 pipeline). `labels_from_fragments` is the host numpy path, not `segment_d`.
 CREMI-A four-T numbers assume our watershed fragments on that volume.
 `min_size` and merge-from-a-precomputed-RAG are not in the public API yet.
+
+## Eval volumes
+
+`scripts/legal_eval.sh` looks for CREMI-A val at
+`data/cremiA_val/affinity.h5` and `data/cremiA_val/gt.h5` (or
+`WATERZ_VAL_DIR`). Optional `--216` times `[3,375,2400,2400]` from
+`data/cremiA_216/affinity.h5`, `data/cache/big_216.h5`, or `WATERZ_AFF_216`.

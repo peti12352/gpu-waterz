@@ -6,7 +6,7 @@ Default (CREMI-A val, if present):
   - four-T VOI at 0.2/0.3/0.4/0.5 (dual-eps 0.08)
   - fragment count vs the published 2,175,400 / 506,568 numbers
 
-Optional --216 times the official [3,375,2400,2400] volume when that
+Optional --216 times the [3,375,2400,2400] volume when that
 HDF5 exists. Needs h5py: `uv sync --extra eval`.
 """
 from __future__ import annotations
@@ -32,13 +32,23 @@ from gpu_waterz.limits import (  # noqa: E402
 )
 from voi_numpy import voi_split_merge  # noqa: E402
 
-AFF_H5 = ROOT / "data/ws_bounty/cremiA_val/affinity.h5"
-GT_H5 = ROOT / "data/ws_bounty/cremiA_val/gt.h5"
-BIG_CANDIDATES = (
-    ROOT / "data/ws_bounty/big/affinity.h5",
-    ROOT / "data/cache/big_216.h5",
-    Path("/tmp/wz_big_216.h5"),
-)
+VAL_DIR = Path(os.environ.get("WATERZ_VAL_DIR", ROOT / "data/cremiA_val"))
+AFF_H5 = VAL_DIR / "affinity.h5"
+GT_H5 = VAL_DIR / "gt.h5"
+
+
+def _big_candidates() -> list[Path]:
+    out = []
+    env = os.environ.get("WATERZ_AFF_216")
+    if env:
+        out.append(Path(env))
+    out.extend((
+        ROOT / "data/cremiA_216/affinity.h5",
+        ROOT / "data/cache/big_216.h5",
+    ))
+    return out
+
+
 SHAPE_216 = (3, 375, 2400, 2400)
 
 PRODUCT_ENV = {
@@ -112,7 +122,7 @@ def grade_val() -> dict:
             "error": "missing CREMI-A val HDF5",
             "affinity": str(AFF_H5),
             "gt": str(GT_H5),
-            "hint": "place cremiA_val/{affinity,gt}.h5 under data/ws_bounty/",
+            "hint": "place affinity.h5 and gt.h5 in data/cremiA_val/ (or WATERZ_VAL_DIR)",
         }
 
     aff = load_h5(AFF_H5, ("affinity",))
@@ -141,11 +151,6 @@ def grade_val() -> dict:
             "ok": bool(ok),
         })
 
-    gold = ROOT / "data/cache/wz_fragments.npy"
-    gold_ident = None
-    if gold.is_file():
-        gold_ident = bool(np.array_equal(fr, np.load(gold)))
-
     ok = bool(ident and t3_ok and four_ok)
     return {
         "ok": ok,
@@ -154,7 +159,6 @@ def grade_val() -> dict:
         "bg": bg,
         "nfrag_published": FRAGMENTS_VAL,
         "bg_published": BG_VAL,
-        "gold_fragments_equal": gold_ident,
         "t03": {
             "split": split_t3,
             "merge": merge_t3,
@@ -172,12 +176,12 @@ def time_216() -> dict:
     from gpu_waterz._backend import seg
 
     wz.require_cuda_libs()
-    path = next((p for p in BIG_CANDIDATES if p.is_file()), None)
+    path = next((p for p in _big_candidates() if p.is_file()), None)
     if path is None:
         return {
             "ok": False,
             "error": "missing 2.16 Gvox affinity HDF5",
-            "tried": [str(p) for p in BIG_CANDIDATES],
+            "tried": [str(p) for p in _big_candidates()],
         }
     aff = load_h5(path, ("affinity",))
     if tuple(aff.shape) != SHAPE_216:

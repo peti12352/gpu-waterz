@@ -2,7 +2,6 @@
 
 Papers and code this repo used, and what we concluded.
 
-- Local PDFs and clones live under `papers/` on the machine that fetched them (not in git).
 - Vendored waterz: [`funkey/waterz`](https://github.com/funkey/waterz) commit
   [`a0184d2`](https://github.com/funkey/waterz/commit/a0184d2af2ab3ed044721fb92822fc6ea9cee665)
   (2025-09-18), at [`src/waterz-upstream/`](../src/waterz-upstream/).
@@ -14,13 +13,13 @@ Papers and code this repo used, and what we concluded.
 
 - **Large scale image segmentation with structured loss based deep learning
   for connectome reconstruction.** Funke et al. *IEEE TPAMI*, 2019.
-  - [DOI](https://doi.org/10.1109/TPAMI.2018.2835450) ·
+  - [DOI](https://doi.org/10.1109/TPAMI.2018.2835450) ;
     [arXiv:1709.02974](https://arxiv.org/abs/1709.02974)
   - CNN affinities, then waterz-style agglomeration.
 
 - **Hierarchical agglomerative graph clustering in poly-logarithmic depth.**
-  Dhulipala, Eisenstat, Łącki, Mirrokni, Shi. *NeurIPS*, 2022. (ParHAC)
-  - [arXiv:2206.11654](https://arxiv.org/abs/2206.11654) ·
+  Dhulipala, Eisenstat, Lacki, Mirrokni, Shi. *NeurIPS*, 2022. (ParHAC)
+  - [arXiv:2206.11654](https://arxiv.org/abs/2206.11654) ;
     code: [ParAlg/ParHAC](https://github.com/ParAlg/ParHAC)
   - (1+eps)-heavy matching plus contract. Official impl is CPU (CPAM), not
     CUDA.
@@ -31,8 +30,8 @@ Papers and code this repo used, and what we concluded.
     eps (layer 0 is most of the merges).
 
 - **It's Hard to HAC Average Linkage!** Bateni, Dhulipala, Gowda,
-  Hershkowitz, Jayaram, Łącki. *ICALP*, 2024.
-  - [arXiv:2404.14730](https://arxiv.org/abs/2404.14730) ·
+  Hershkowitz, Jayaram, Lacki. *ICALP*, 2024.
+  - [arXiv:2404.14730](https://arxiv.org/abs/2404.14730) ;
     [LIPIcs](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ICALP.2024.18)
   - Exact average-linkage has no friendly poly-log parallel algorithm
     under standard assumptions. Why we approximate merge *order* and keep
@@ -40,10 +39,10 @@ Papers and code this repo used, and what we concluded.
 
 - **Cross-dimension affinity distillation for 3D EM neuron segmentation.**
   Xiaoyu Liu et al. *CVPR*, 2024.
-  - [CVF](https://openaccess.thecvf.com/content/CVPR2024/html/Liu_Cross-Dimension_Affinity_Distillation_for_3D_EM_Neuron_Segmentation_CVPR_2024_paper.html) ·
-    [DOI](https://doi.org/10.1109/CVPR52733.2024.01056) ·
+  - [CVF](https://openaccess.thecvf.com/content/CVPR2024/html/Liu_Cross-Dimension_Affinity_Distillation_for_3D_EM_Neuron_Segmentation_CVPR_2024_paper.html) ;
+    [DOI](https://doi.org/10.1109/CVPR52733.2024.01056) ;
     code: [liuxy1103/CAD](https://github.com/liuxy1103/CAD)
-  - CREMI-A val affinities in the bounty tarball (CAD checkpoint).
+  - CREMI-A val affinities from the CAD checkpoint.
 
 ## Same RAG, different clustering
 
@@ -52,7 +51,7 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
 
 - **The mutex watershed and its superpixelation of images.** Wolf et al.
   *IEEE TPAMI*, 2020.
-  - [DOI](https://doi.org/10.1109/TPAMI.2020.2980827) ·
+  - [DOI](https://doi.org/10.1109/TPAMI.2020.2980827) ;
     [arXiv:1904.12654](https://arxiv.org/abs/1904.12654)
   - ECCV 2018 short: [arXiv:1705.08369](https://arxiv.org/abs/1705.08369)
   - Frozen-weight Kruskal plus repulsive constraints. Means do not update.
@@ -82,7 +81,7 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
 
 - **Constrained connectivity for hierarchical image partitioning and
   simplification.** Soille. *IEEE TPAMI*, 2008.
-  - [DOI](https://doi.org/10.1109/TPAMI.2007.70817) ·
+  - [DOI](https://doi.org/10.1109/TPAMI.2007.70817) ;
     [HIGRA docs](https://higra.readthedocs.io/en/stable/python/constrained_connectivity_hierarchy.html)
   - Not contact-mean.
 
@@ -102,13 +101,13 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
     expensive step; ours is list-compress after basins, not BFS.
 
 - **TeraHAC: Hierarchical agglomerative clustering of trillion-edge
-  graphs.** Dhulipala, Lee, Łącki, Mirrokni.
+  graphs.** Dhulipala, Lee, Lacki, Mirrokni.
   - [arXiv:2308.03578](https://arxiv.org/abs/2308.03578)
   - SubgraphHAC / good-merge on a partitioned graph. Control-flow is not
     our ParHAC matching on one RAG.
 
 - **DynHAC: Fully dynamic approximate hierarchical agglomerative
-  clustering.** Yu, Dhulipala, Łącki, Parotsidis.
+  clustering.** Yu, Dhulipala, Lacki, Parotsidis.
   - [arXiv:2501.07745](https://arxiv.org/abs/2501.07745)
   - Dynamic TeraHAC.
 
@@ -124,9 +123,9 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
   - Cardinality UPGMA (ParHAC `AverageLinkageWeight`) already failed VOI
     here.
 
-- **Méthodes nouvelles en classification automatique de données
+- **Methodes nouvelles en classification automatique de donnees
   taxinomiques nombreuses.** Bruynooghe. *Statistique et analyse des
-  données*, 1977.
+  donnees*, 1977.
   - [NUMDAM](https://www.numdam.org/item/SAD_1977__2_3_24_0/)
   - Reciprocal-nearest-neighbour HAC is a *schedule* for reducible
     linkages, not an 8th linkage.
@@ -138,7 +137,7 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
   - Same RNN class.
 
 - **Hierarchical agglomerative graph clustering in nearly-linear time.**
-  Dhulipala, Eisenstat, Łącki, Mirrokni, Shi. (SeqHAC)
+  Dhulipala, Eisenstat, Lacki, Mirrokni, Shi. (SeqHAC)
   - [arXiv:2106.05610](https://arxiv.org/abs/2106.05610)
   - Complete-link under-merges here (split ~1.3-1.5).
 
@@ -157,11 +156,11 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
   - [NeurIPS](https://proceedings.neurips.cc/paper/2017/hash/2e1b24a664f5e9c18f407b2f9c73e821-Abstract.html)
   - Later, same line: **Parallel hierarchical agglomerative clustering in
     low dimensions.** Bateni, Dhulipala, Fletcher, Gowda, Hershkowitz,
-    Jayaram, Łącki. [arXiv:2507.20047](https://arxiv.org/abs/2507.20047)
+    Jayaram, Lacki. [arXiv:2507.20047](https://arxiv.org/abs/2507.20047)
   - Ward / centroid in R^k, not ParHAC clustered-graph.
 
 - **Chamfer-linkage for hierarchical agglomerative clustering.** Gowda,
-  Fletcher, Bateni, Dhulipala, Hershkowitz, Jayaram, Łącki.
+  Fletcher, Bateni, Dhulipala, Hershkowitz, Jayaram, Lacki.
   - [arXiv:2602.10444](https://arxiv.org/abs/2602.10444)
   - None of the variants are reducible.
 
@@ -185,37 +184,36 @@ Same cached CREMI-A contact-mean RAG, same VOI grader
 - **RAPIDS cuML** `AgglomerativeClustering`: `linkage={"single"}` only.
   - [docs](https://docs.nvidia.com/cuml/latest/api/generated/cuml.cluster.AgglomerativeClustering/)
 
-## Software cloned locally (not vendored)
+## Related software
 
 - [ParAlg/ParHAC](https://github.com/ParAlg/ParHAC)
 - [google/graph-mining](https://github.com/google/graph-mining) (TeraHAC / clustered-graph)
 - [constantinpape/nifty](https://github.com/constantinpape/nifty)
 - [constantinpape/affogato](https://github.com/constantinpape/affogato) (GASP mean path)
 - [sciai-lab/mutex-watershed](https://github.com/sciai-lab/mutex-watershed)
-- [funkelab/lsd](https://github.com/funkelab/lsd) —
+- [funkelab/lsd](https://github.com/funkelab/lsd) ;
   [agglomerate worker](https://github.com/funkelab/lsd/blob/tutorial/lsd/tutorial/scripts/workers/agglomerate_worker.py)
 - [rapidsai/cuvs](https://github.com/rapidsai/cuvs) (single-linkage, not this RAG)
 - [PytorchConnectomics/waterz](https://github.com/PytorchConnectomics/waterz) (region-graph helpers)
 
-## Not obtained / not used
+## Not used here
 
-- **GALA.** Nunez-Iglesias et al. *PLOS ONE*, 2013, e71715. Not read.
-  - [DOI](https://doi.org/10.1371/journal.pone.0071715) ·
+- **GALA.** Nunez-Iglesias et al. *PLOS ONE*, 2013, e71715.
+  - [DOI](https://doi.org/10.1371/journal.pone.0071715) ;
     [arXiv:1303.6163](https://arxiv.org/abs/1303.6163)
-  - An [arXiv:1303.5942](https://arxiv.org/abs/1303.5942) PDF that landed
-    under that name is Brassard, Devroye, Gravel, *Exact simulation of the
-    GHZ distribution* — a different paper.
+  - [arXiv:1303.5942](https://arxiv.org/abs/1303.5942) is a different paper
+    (Brassard, Devroye, Gravel, *Exact simulation of the GHZ distribution*).
 
-- Meilă, **Comparing clusterings by the variation of information.**
-  *COLT*, 2003. [DOI](https://doi.org/10.1007/978-3-540-45167-9_14)
-  Not obtained. VOI here is waterz
+- Meila, **Comparing clusterings by the variation of information.**
+  *COLT*, 2003. [DOI](https://doi.org/10.1007/978-3-540-45167-9_14).
+  VOI here is waterz
   [`evaluate.hpp`](../src/waterz-upstream/src/waterz/backend/evaluate.hpp):
   split `H(seg|gt)`, merge `H(gt|seg)`, skip `gt==0`.
 
 - Zlateski, **A design and implementation of an efficient, parallel
   watershed algorithm for affinity graphs.** MIT M.Eng., 2011.
-  [DSpace](https://dspace.mit.edu/handle/1721.1/66820). Not obtained.
+  [DSpace](https://dspace.mit.edu/handle/1721.1/66820).
 
 - Turaga et al., **Convolutional networks can learn to generate affinity
   graphs for image segmentation.** *Neural Computation*, 2010.
-  [DSpace](https://dspace.mit.edu/handle/1721.1/60924). Not obtained.
+  [DSpace](https://dspace.mit.edu/handle/1721.1/60924).

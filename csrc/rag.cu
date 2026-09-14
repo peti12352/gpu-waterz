@@ -51,7 +51,7 @@ extern "C" size_t rag_mem_cur(void) { return g_rag_cur; }
 // atomicAdd gave a different result whenever two runs interleaved their atomics
 // differently: measured 740853 of 7505458 val edges disagreeing between two
 // runs on identical input, max drift 5.2e-3. That propagates into every merge
-// decision and breaks TASK.md's "same input -> byte-identical labels".
+// decision and breaks "same input -> byte-identical labels".
 //
 // An integer sum is exact, so the result is independent of atomic order. The
 // struct stays 16 bytes, so the table costs no extra memory.
