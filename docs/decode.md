@@ -100,7 +100,7 @@ Metric: `waterz.evaluate(labels.uint64, gt.uint64)`.
 ## Why ParHAC, and why two eps values
 
 Exact average-linkage HAC has no friendly poly-log parallel algorithm
-(ParHAC 2022; Abboud et al., [arXiv:2404.14730](https://arxiv.org/abs/2404.14730)).
+(ParHAC 2022; Bateni et al., [arXiv:2404.14730](https://arxiv.org/abs/2404.14730)).
 The serial waterz heap is global min edge, merge, reweight, repeat. Mapping
 that to CUDA as one pop per kernel keeps the serial chain.
 
