@@ -7,32 +7,28 @@ library on CREMI-A. Call from numpy or torch.
 EM volume -> CNN affinities [3,Z,Y,X] -> gpu_waterz.segment -> uint32 labels
 ```
 
-## What this repo contributes
+## Why this exists
 
-Connectomics CNNs already run on GPU. Turning those affinities into labels
-is still often a CPU [`waterz`](https://github.com/funkey/waterz) call.
-This repo is that step on CUDA.
+The network already left the CPU. [`waterz`](https://github.com/funkey/waterz)
+did not. This is that leftover call, on CUDA: affinities in, neuron labels
+out.
 
-- **Same objects as stock waterz on CREMI-A.** Split errors and merge
-  errors (VOI) each within +0.02 of the CPU library at four thresholds.
-  Two runs write the same labels. Fragment IDs do not have to match waterz.
-- **Fast enough to sit after the network.** About 3.1 s for 2.16 billion
-  voxels on an idle RTX 5090 (~0.70 Gvox/s). That volume fits in ~13 GiB;
-  a naive fused buffer set is ~42 GiB.
-- **A library, not a one-off script.** numpy or torch CUDA. Full pipeline,
-  or watershed / region graph / merge-from-fragments as separate calls.
+On CREMI-A it matches the CPU library. Split and merge errors (VOI) each
+stay within +0.02 at 0.2 / 0.3 / 0.4 / 0.5, and two runs write the same
+bytes. Idle RTX 5090, 2.16 billion voxels: 3.1 seconds, about 13 GiB
+instead of 42. numpy or torch; the whole pipeline or the stages.
 
-This is not a new way to glue fragments. The merge statistic is still the
-one waterz uses (contact-mean). The GPU cannot cheaply run the serial
-heap, so merge order is a parallel approximation. Exact average-linkage on
-GPU is not claimed. Clustering that looks GPU-friendly (mutex, Kruskal,
-and the rest) produces the wrong objects on the same graph:
-[voi_atlas.csv](data/cache/voi_atlas.csv).
+The glue is still waterz contact-mean. A GPU cannot cheaply pop a serial
+heap, so the *order* of those glues is a parallel approximation. Mutex,
+Kruskal, GASP, and the rest look like the GPU-native move. They are not
+the same objects.
 
-How it works, and the knobs behind those numbers:
-[docs/decode.md](docs/decode.md). Other GPUs and VRAM:
-[docs/porting.md](docs/porting.md). Papers:
-[docs/citations.md](docs/citations.md). Tables below.
+![VOI split vs merge at affinity 0.3](docs/voi_t03.svg)
+
+Same graph, same grader. The box is stock waterz plus 0.02. Kruskal, GASP,
+and NNG do not fit these axes; their numbers are in the corner.
+[voi_atlas.csv](data/cache/voi_atlas.csv). How:
+[docs/decode.md](docs/decode.md).
 
 ## Install
 
@@ -102,8 +98,8 @@ need not match waterz; the partition is what is graded.
 | 0.4 | 0.5162 | 0.5378 | 0.2268 | 0.2381 |
 | 0.5 | 0.6129 | 0.6309 | 0.2184 | 0.2293 |
 
-Mutex, Kruskal, and frozen-edge MST produce different partitions on the
-same RAG: [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
+See the figure above. Full table:
+[data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
 
 ## Speed (idle RTX 5090)
 
