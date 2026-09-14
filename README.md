@@ -20,9 +20,9 @@ the VOI box:
 
 ![VOI split vs merge at affinity 0.3](docs/voi_t03.png)
 
-a: the waterz +0.02 gate. b: the same points at full scale.
-[voi_atlas.csv](data/cache/voi_atlas.csv). Algorithm:
-[docs/decode.md](docs/decode.md).
+Green is the waterz +0.02 gate. RNN and WPGMA sit on mutex; GASP and
+Kruskal are off this window ([voi_atlas.csv](data/cache/voi_atlas.csv)).
+Algorithm: [docs/decode.md](docs/decode.md).
 
 ## Install
 
