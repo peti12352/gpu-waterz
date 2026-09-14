@@ -764,7 +764,10 @@ def main():
               f"merges={r['nmerge']} nseg={r['nseg']}{extra}", flush=True)
 
     ok = True
-    if "base" in got and not args.max_layer and not args.sub:
+    if (
+        "base" in got and not args.max_layer and not args.sub
+        and abs(args.eps - 0.08) < 1e-12 and abs(args.threshold - 0.3) < 1e-12
+    ):
         ref = json.loads((CACHE / FINGERPRINT).read_text())
         b = got["base"]
         checks = [

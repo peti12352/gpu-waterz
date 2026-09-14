@@ -29,9 +29,13 @@ The old ~840 ms leftover mixed NVTX with the fuse kernel and is invalid.
 N21 listed insert/rebuild (A1/A2/A4) identity+four PASS on val; cold cuts
 35/51/54 ms vs D0 456.8 ms; none cleared the 100 ms 2.16 gate. N22 occupied
 emit (A3/A5) identity+four PASS; 18 ms solo / 62 ms stacked with listed;
-insert-time slot atomicAdd ate the ntab-scan save. Rewrite remains
-O(nscan). Exact / RNN / StarMerge / complete / WPGMA / spatial Lu
-Alg 2 are not GPU closers (see Ruled out).
+insert-time slot atomicAdd ate the ntab-scan save. N23_A0 forced A5 2.16:
+identity+four PASS, agg **1622-1624 ms** vs 1679.9 (val cut only 17 ms);
+`keep_default=false`. N23_D0 CPU CSR splice equals scan every inner.
+N23_A1 GPU CSR identity+four PASS, 2.16 agg **23240 ms** (`k_csr_gather`
+pointer-chase). Dense rewrite remains the legal path. Exact / RNN /
+StarMerge / complete / WPGMA / spatial Lu Alg 2 are not GPU closers
+(see Ruled out).
 
 Current stage breakdown (idle RTX 5090, pin `data/cache/N19_I0_REPRO.json`):
 
@@ -76,34 +80,38 @@ already does not reach a 1080 ms e2e budget by itself.
 
 | listed insert/rebuild (holes ∪ alist) | identity+four PASS; val cuts 35-54 ms; no 2.16 | N21_A1, N21_A2, N21_A4 |
 | compress-subset / list-only J-jump | D0 no-go / val WS -6 ms; fat list structural | N21_W1, N21_W2, N21_W3 |
-| occupied-slot hash emit | identity+four PASS; val 18 ms / stack 62 ms; no 2.16 | N22_A3, N22_A5 |
+| occupied-slot hash emit | identity+four PASS; val 18 ms / stack 62 ms; A5 2.16 **1622-1624** keep_default false | N22_A3, N22_A5, N23_A0 |
+| contact-mean CSR rewrite | CPU set-equal; GPU identity+four PASS; 2.16 **23240 ms**; gather owns nsys | N23_D0, N23_A1 |
 
 Do not reopen IDs in `data/cache/n19_dead.jsonl`. N20 stamps live in
 `data/cache/n20_dead.jsonl`. N21 stamps live in `data/cache/n21_dead.jsonl`.
-N22 stamps live in `data/cache/n22_dead.jsonl`.
+N22 stamps live in `data/cache/n22_dead.jsonl`. N23 stamps live in
+`data/cache/n23_dead.jsonl`.
 Do not launch `csrc/n20_rnn_gpu_prep.cu`.
 Product default stays E6s. Do not CONT `AGG_E6t`. Do not default
 `WATERZ_LISTED_INSERT` / `WATERZ_LISTED_REBUILD` / `WATERZ_LIST_JUMP` /
-`WATERZ_SLOT_EMIT`.
+`WATERZ_SLOT_EMIT` / `WATERZ_CSR_REWRITE`.
 
 ## Remaining (structural)
 
-1. `k_rewrite_dirty_fuse` is still dense nscan (273 ms @ 2.16). Holes are
-   its output. First inner ndirty 5.6M vs nact 2.8M (half below-TL live
-   dirty, not on alist). No dirty-edge CSR on the legal path; `adj_off`
-   is E6t StarMerge-only (do not launch). Stamp `N22_REWRITE_NEEDS_CSR`.
+1. `k_rewrite_dirty_fuse` is still dense nscan (273 ms @ 2.16). N23 CSR
+   (`head`/`nxt` splice + listed fuse) matches the CPU scan set and GPU
+   parents, then loses on pointer-chase (`k_csr_gather` 95% of val nsys;
+   2.16 agg 23240 ms). Do not rebuild from full nscan each inner. Do not
+   launch E6t `e6t_rebuild`. A coalesced dirty structure is still open.
 2. `k_hash_emit_holes` stays O(ntab) on the product path. Occupied-slot
-   emit (`WATERZ_SLOT_EMIT`) is parent-identical but 18 ms val / 62 ms
-   stacked (N22_A3/A5); CUB DeviceSelect over ntab is still O(ntab).
-   `k_copy_sz_list` 114.5 ms is already listed over roots and required
-   for freeze eps (`N22_COPY_SZ_NECESSARY`).
+   emit (`WATERZ_SLOT_EMIT`) is parent-identical; stacked with listed
+   insert/rebuild it is a ~56 ms 2.16 cut (N23_A0) with flags still off.
+   CUB DeviceSelect over ntab is still O(ntab). `k_copy_sz_list` 114.5 ms
+   is already listed over roots and required for freeze eps
+   (`N22_COPY_SZ_NECESSARY`).
 3. `k_w5_compress_list` 508 ms is a 71-105M-entry list, hop_max=9. Hook list
    must keep faces+phase-1 roots. Freeze WS (N21_W3).
 
 There is no unused GPU mean-HAC class left to port (S43). GPU prep for RNN
 and StarMerge must stay unlaunched (`N20_GPU_PREP.json`: `ran_gpu=false`).
-Listed / slot-emit kernels stay env-gated. Cite [N21_WIN.md](N21_WIN.md)
-and [N22_WIN.md](N22_WIN.md).
+Listed / slot-emit / CSR kernels stay env-gated. Cite [N21_WIN.md](N21_WIN.md),
+[N22_WIN.md](N22_WIN.md), [N23_WIN.md](N23_WIN.md).
 
 ## Why this matters beyond one benchmark
 

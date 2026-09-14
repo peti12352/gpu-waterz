@@ -14,7 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / "data/cache"
-SELF_MARKERS = ("n20_", "n21_", "n22_", "librac_agg", "n20_cpu_run")
+SELF_MARKERS = (
+    "n20_", "n21_", "n22_", "n23_", "librac_agg", "n20_cpu_run",
+    "g0_agg_ref",
+)
 FOREIGN_MARKERS = (
     "leocad", "xvfb", "p1_real_comparison", "sft_train", "vllm",
     "sft_pilot", "generate_and_filter", "elm_mutation",
