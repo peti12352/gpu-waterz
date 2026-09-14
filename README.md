@@ -10,9 +10,11 @@ EM volume -> CNN affinities [3,Z,Y,X] -> gpu_waterz.segment -> uint32 labels
 Most pipelines still run CPU waterz after the net. This keeps the decode
 on the device.
 
-On CREMI-A val it tracks stock waterz to +0.02 VOI at 0.2, 0.3, 0.4, and
-0.5 (split and merge both). A second run is byte-identical. Idle RTX 5090:
-3.1 s for 2.16 Gvox, ~13 GiB peak vs ~42 fused.
+On [CREMI](https://cremi.org) sample A (2016 MICCAI challenge: adult
+Drosophila serial-section EM) we grade a 1200 x 1200 x 125 crop. VOI
+tracks stock waterz to +0.02 at 0.2, 0.3, 0.4, and 0.5 (split and merge
+both). A second run is byte-identical. Speed is a larger 2.16 Gvox stack
+on an idle RTX 5090, not that crop: 3.1 s, ~13 GiB peak vs ~42 fused.
 
 ![3.1 s on 2.16 Gvox, idle RTX 5090](docs/speed_216.png)
 
@@ -76,7 +78,13 @@ Raising past 0.40 fails merge VOI at 0.3.
 Stock `waterz.agglomerate` is the full pipeline (our `segment`). LSD's
 agglomerate worker is merge-from-fragments (`labels_from_fragments`).
 
-## Quality (CREMI-A val `[3,125,1200,1200]`)
+## Quality (CREMI sample A, 1200 x 1200 x 125)
+
+[CREMI](https://cremi.org) is a neuron-reconstruction challenge on adult
+fly brain EM. Sample A is one of three volumes; this crop is 1200 x 1200
+x 125 (CREMI A is 1250 x 1250 x 125). Affinities are from the CAD
+checkpoint (Liu et al., CVPR 2024), not a CREMI leaderboard entry. What
+we grade: [docs/decode.md](docs/decode.md).
 
 VOI split **and** VOI merge each within +0.02 of stock waterz at affinity
 0.2, 0.3, 0.4, 0.5. Run-to-run labels are byte-identical. Fragment IDs

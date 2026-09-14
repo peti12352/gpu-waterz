@@ -1,7 +1,7 @@
 # Using gpu-waterz
 
 Install and API table: [README](../README.md). What the algorithm is, and
-what the CREMI-A numbers mean: [decode.md](decode.md). Other GPUs:
+what the CREMI sample A numbers mean: [decode.md](decode.md). Other GPUs:
 [porting.md](porting.md).
 
 ## vs `pip install waterz`
@@ -62,12 +62,13 @@ labels out.
 [LSD agglomerate worker](https://github.com/funkelab/lsd/blob/tutorial/lsd/tutorial/scripts/workers/agglomerate_worker.py)
 is merge-from-fragments. Our `agglomerate` name matches stock waterz (full
 pipeline). `labels_from_fragments` is the host numpy path, not `segment_d`.
-CREMI-A four-T numbers assume our watershed fragments on that volume.
+CREMI sample A four-T numbers assume our watershed fragments on that crop.
 `min_size` and merge-from-a-precomputed-RAG are not in the public API yet.
 
 ## Eval volumes
 
-`scripts/legal_eval.sh` looks for CREMI-A val at
-`data/cremiA_val/affinity.h5` and `data/cremiA_val/gt.h5` (or
+`scripts/legal_eval.sh` looks for the CREMI sample A crop (1200 x 1200 x
+125) at `data/cremiA_val/affinity.h5` and `data/cremiA_val/gt.h5` (or
 `WATERZ_VAL_DIR`). Optional `--216` times `[3,375,2400,2400]` from
-`data/cremiA_216/affinity.h5`, `data/cache/big_216.h5`, or `WATERZ_AFF_216`.
+`data/cremiA_216/affinity.h5`, `data/cache/big_216.h5`, or `WATERZ_AFF_216`
+(a 3 x 2 x 2 tiling of that crop, not a CREMI download).

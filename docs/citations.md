@@ -11,6 +11,14 @@ Papers and code this repo used, and what we concluded.
 
 ## Used in the product
 
+- **CREMI.** MICCAI Challenge on Circuit Reconstruction from Electron
+  Microscopy Images, 2016. [cremi.org](https://cremi.org)
+  Adult Drosophila ssTEM, volumes A, B, and C. Each training block is
+  1250 x 1250 x 125 voxels (~5 um on a side at 4 x 4 x 40 nm). Quality
+  numbers here are sample A, a 1200 x 1200 x 125 crop, CAD affinities
+  (Liu et al. below). Not a CREMI leaderboard submission. The 2.16 Gvox
+  timing volume is a 3 x 2 x 2 tiling of that crop, not a CREMI download.
+
 - **Large scale image segmentation with structured loss based deep learning
   for connectome reconstruction.** Funke et al. *IEEE TPAMI*, 2019.
   - [DOI](https://doi.org/10.1109/TPAMI.2018.2835450) ;
@@ -42,7 +50,7 @@ Papers and code this repo used, and what we concluded.
   - [CVF](https://openaccess.thecvf.com/content/CVPR2024/html/Liu_Cross-Dimension_Affinity_Distillation_for_3D_EM_Neuron_Segmentation_CVPR_2024_paper.html) ;
     [DOI](https://doi.org/10.1109/CVPR52733.2024.01056) ;
     code: [liuxy1103/CAD](https://github.com/liuxy1103/CAD)
-  - CREMI-A val affinities from the CAD checkpoint.
+  - CREMI sample A crop; affinities from this CAD checkpoint.
 
 ## Same RAG, different clustering
 
