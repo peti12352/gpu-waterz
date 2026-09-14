@@ -7,17 +7,17 @@ lego PID 1880797 still on GPU (do not touch)
 ## T0 PASS
 command: uv venv .venv --python 3.12; uv pip install --python .venv h5py numpy; SETUPTOOLS_SCM_PRETEND_VERSION=0.9.5 uv pip install --python .venv -e src/waterz-upstream
 note: PyPI waterz has no cp312 wheel; used vendored a0184d2
-import waterz,h5py,numpy: ok (waterz.__version__ prints "uninstalled" — upstream __init__ bug, import works)
+import waterz,h5py,numpy: ok (waterz.__version__ prints "uninstalled": upstream __init__ bug, import works)
 import torch: ModuleNotFoundError
 nvidia-smi compute: 1880797 python3 8652 MiB (lego)
 
 ## E0 PASS
 command: uvx gdown 1zbGpyr9M5Pvhgfy96V9erQwAeRZo23hW -O data/waterz_bounty.tar; tar xf
-listing: cremiA_val/{affinity,gt,raw}.h5, baseline/{labels_thr*.h5,voi.csv,run_baseline.py}, make_big.py, viz/, README.md — present (plus make_viz.py, extra thr 0.1/0.7/0.9)
+listing: cremiA_val/{affinity,gt,raw}.h5, baseline/{labels_thr*.h5,voi.csv,run_baseline.py}, make_big.py, viz/, README.md: present (plus make_viz.py, extra thr 0.1/0.7/0.9)
 shapes: affinity (3,125,1200,1200) uint8; gt (125,1200,1200) uint32
 voi.csv rounded == TASK.md table
 threshold: FACT score=1-aff; see notes/THRESHOLD.md
-README vs S1–S5: no semantic delta; see notes/TARBALL_VS_SOURCE.md
+README vs S1-S5: no semantic delta; see notes/TARBALL_VS_SOURCE.md
 
 ## E0b PASS-structure / FAIL-1e-05-jitter
 command: unset CUDA_VISIBLE_DEVICES; data/ws_bounty + .venv/bin/python baseline/run_baseline.py
@@ -77,7 +77,7 @@ ACCURACY GATE: FAIL
 
 Borůvka mutual-only: hung (too few pairs/round). killed pid 3060018.
 
-Fallback: exact S4 labels from E4 → mine_thr{0.2,0.3,0.4,0.5}.h5
+Fallback: exact S4 labels from E4 -> mine_thr{0.2,0.3,0.4,0.5}.h5
 nseg: 294518 322167 345376 379876
 grader:
 
@@ -150,8 +150,8 @@ no 3090 Ti on greengoblin. no graded speed number.
 command: .venv/bin/python scripts/x0_frozen_cc.py
 frozen CC on cached RAG (mean > T, lower-id UF)
 nseg 279468/309454/330578/355268 (S4 was 294k/322k/345k/380k)
-grader: merge VOI 7.78/7.55/6.43/4.61 — giant component (most voxels in one blob)
-X0b delta 0.02 min_size 0: merge still ~7.75. min_size 16 deletes dust (nseg→9k) and makes it worse.
+grader: merge VOI 7.78/7.55/6.43/4.61: giant component (most voxels in one blob)
+X0b delta 0.02 min_size 0: merge still ~7.75. min_size 16 deletes dust (nseg->9k) and makes it worse.
 AGG unset. Frozen CC is not a product agglomerator.
 
 ## X1 FAIL (all B)
@@ -163,7 +163,7 @@ B=1024 0.4+0.5 PASS; 0.3 merge 0.2724>0.2611; 0.2 merge 0.498>0.3525
 Giant shrinks with B but 0.2 still far. Union-all-in-band is too aggressive.
 
 ## X1b FAIL
-mutual matching-in-bucket B=16: nseg ~1.05–1.15M (under-merge). split VOI ~2.0 FAIL.
+mutual matching-in-bucket B=16: nseg ~1.05-1.15M (under-merge). split VOI ~2.0 FAIL.
 Same hang mode as E5 mutual-only. Do not ship.
 
 ## X2 residual
@@ -171,18 +171,18 @@ edges with mean>0.55 still 4.56M. S4 tail forbidden (>=50k).
 
 ## AGG lock
 AGG=parhac-ε 0.01. Y2 grader PASS, max_comp≤2.3%, same ε all T.
-Y1 RAC also PASS (too serial, 12073 rounds). ε=0.01 is 8653 rounds / 501s — still serial.
+Y1 RAC also PASS (too serial, 12073 rounds). ε=0.01 is 8653 rounds / 501s: still serial.
 Y0: n_rnn_r0=339417 rounds50_rnn_sum=457433 (decays to ~600 by r50).
 
 ## H0
 heap_s4 after wrapper fixes: build=1.54s setEdge=0.05 merge=17.7s extract=0.03 total=19.4s.
 Hot path is vendored mergeUntil (findEdge/removeInc), not graph build or extract.
-std::map _rootPaths → vector (extract 2.0s→0.03s). Hash findEdge: merge 23.8s→17.7s.
+std::map _rootPaths -> vector (extract 2.0s->0.03s). Hash findEdge: merge 23.8s->17.7s.
 Cannot hit ≤4s without replacing S4. RAC/ParHAC replace the heap.
 
 ## R1 PARTIAL
 GPU flow + host S1 plateau_basins: G2 PASS n=2175400 bg=506568 det=True sec=5.5 (need <80ms).
-GPU wavefront+UF/jump: bg can match; fragment count 2.3–12M; not shipped.
+GPU wavefront+UF/jump: bg can match; fragment count 2.3-12M; not shipped.
 
 ## R2 PASS accuracy / speed short
 atomic-hash RAG on device, CUB compact.
@@ -201,12 +201,12 @@ New RAG sum/count vs incremental float did not break the gate.
 
 ## Y0
 T=0.3 cached RAG. n_rnn_r0=339417 n_onesided=1192303 smin=0.003922
-50-round RNN trajectory decays 339k→596. rounds50_rnn_sum=457433.
-Verdict: mixed — RAC is exact (Y1) but serial after ~10 rounds.
+50-round RNN trajectory decays 339k->596. rounds50_rnn_sum=457433.
+Verdict: mixed: RAC is exact (Y1) but serial after ~10 rounds.
 
 ## Y1 PASS / too serial
 command: .venv/bin/python scripts/y1_rac.py
-exact RAC + global-min fallback, incremental T high→low.
+exact RAC + global-min fallback, incremental T high->low.
 nseg 294231/322100/345244/379804 max_comp 0.024/0.014/0.014/0.014
 rounds 1764/580/549/12073 rnn_merges only (0 singletons) wall=536s
 ACCURACY GATE: PASS (tightest 0.2 merge 0.3492 vs 0.3525)
@@ -277,7 +277,7 @@ ACCURACY GATE: FAIL. Extra closed-plateau CCs are not dust. Host S1 stays the ac
 Matching-only cannot hit the 10ms AGG budget. E3 required. Y2-ε0.1 is a valid accuracy lock.
 
 ## E3 paper Alg. 1+2 (waterz mean, seed 0, TL=max(T,Wmax/(1+ε)))
-command: .venv/bin/python scripts/e3_paper_parhac.py --eps …
+command: .venv/bin/python scripts/e3_paper_parhac.py --eps ...
 ε=0.10: ACCURACY GATE: FAIL wall=92s. 0.2 merge 0.3526 > 0.3525 (1e-4). layers 8/3/4/5.
 ε=0.033333 (Thm A.4 δ=ε/3 for user ε=0.1): ACCURACY GATE: PASS wall=207s
   0.2 split 0.3750 merge 0.3303
@@ -303,7 +303,7 @@ E5b: keep a layer-edge list; do not rescan all live each outer/inner.
 
 ## E5b PASS
 command: e3_paper_parhac.py --eps 0.033333 after layer-list
-ACCURACY GATE: PASS wall=29.039s (117s → 29s). Same nseg/inner/outer as E5a, same VOI to printed digits.
+ACCURACY GATE: PASS wall=29.039s (117s -> 29s). Same nseg/inner/outer as E5a, same VOI to printed digits.
 AGG lock remains paper-ε 0.033333. 29s is still >>10ms (1778 inners, 1841 outers).
 
 ## D0 (locked paper-ε 0.033333)
@@ -317,7 +317,7 @@ ACCURACY GATE: PASS wall=29.653 (same lock)
 | 0.3 | 44 | 211 | 190 | 246 | 61912 | 11187 | 255 | 225 |
 | 0.2 | 49 | 303 | 252 | 339 | 75839 | 12217 | 352 | 325 |
 
-empty-Ec is **not** the majority at T=0.5 (134/1021). 887 outers merge. 999/1021 leave edges with contact-mean still ≥ TL. Lemma 2.2 case (b) absent. Total inners=1778.
+empty-Ec is **not** the majority at T=0.5 (134/1021). 887 outers merge. 999/1021 leave edges with contact-mean still >= TL. Lemma 2.2 case (b) absent. Total inners=1778.
 
 ## E9a
 command: .venv/bin/python scripts/e9a_hist.py
@@ -330,7 +330,7 @@ E9b is the speed path (no giant component).
 ## E9b PASS
 command: .venv-cuda/bin/python scripts/e9b_divide.py
 SV hook UF (40 rounds) + one FIFO thread per plateau.
-ncorner=61035574 nplat=55032772 bfs_ms=13.77 (later 8.56–13.74)
+ncorner=61035574 nplat=55032772 bfs_ms=13.77 (later 8.56-13.74)
 mismatch=0 / 180000000 array_equal=True
 First CAS-unite hung; 64-iter unite had 1393 bit diffs. SV+atomicMin is the lock.
 
@@ -353,13 +353,13 @@ AGG lock = paper-ε **0.08** (largest PASS). 939 inners still > 400.
 ## E13 FAIL / killed
 command: .venv/bin/python scripts/e13_upgma.py
 Official UPGMA ParHAC, stop UPGMA Wmax≤T, ε=0.1.
-nseg 859963/924990/982733/1046530 (S4 was 294k–380k)
-split VOI 2.31–2.44 FAIL all T. Under-merge as predicted.
+nseg 859963/924990/982733/1046530 (S4 was 294k-380k)
+split VOI 2.31-2.44 FAIL all T. Under-merge as predicted.
 Do not invent a contact-mean cut.
 
 ## E6 SKIP
 locked_inners=939 > 400. Persistent GPU ContractLayer cannot hit 10 ms
-(939 × 20 µs = 19 ms work floor; launch-per-inner worse).
+(939 x 20 us = 19 ms work floor; launch-per-inner worse).
 
 ## E10 PASS
 extract_gpu labels[i]=parent[seg[i]] array_equal=True device_ms=3.434 (180 Mvox)
@@ -373,17 +373,17 @@ G4r ACCURACY GATE: PASS
   0.5 split 0.6145 merge 0.2100 PASS
 G5r array_equal=True
 G6r one-shot ws=0.845 rag=0.162 agg=41.785 extract=0.483 total=43.275 FAIL (<0.050s)
-  WS 0.845 is host API (H2D + 40 SV rounds + 8–14 ms BFS + D2H); device BFS ≤14 ms.
+  WS 0.845 is host API (H2D + 40 SV rounds + 8-14 ms BFS + D2H); device BFS ≤14 ms.
   AGG 41.8 s is one threshold started from the raw RAG (does the high-T work in-band).
-G7 not run (G6r FAIL). G9 BLOCKED — no 3090 Ti.
+G7 not run (G6r FAIL). G9 BLOCKED: no 3090 Ti.
 G6 remains blocked by contact-mean ParHAC round count, not by missing CUDA.
 
 ## P0 (measure only)
-P0b red_viol=0 — contact-mean S3 is reducible. T14 allowed.
+P0b red_viol=0: contact-mean S3 is reducible. T14 allowed.
 P0a ε=0.08 ninner_records=1765 layer_mean=40647 layer_max=2367715
 ec_mean=4091 us_mean=11608 us_p50=181 us_max=1441795
-(20 µs GPU floor was a guess; CPU inner p50 is 181 µs, mean 11.6 ms.)
-P0c basin SV first_zero=6 (r0–5 still change; r6+ = 0). Adaptive SV=7.
+(20 us GPU floor was a guess; CPU inner p50 is 181 us, mean 11.6 ms.)
+P0c basin SV first_zero=6 (r0-5 still change; r6+ = 0). Adaptive SV=7.
 P0d after E9b: unique=89695822 multi=89797610 (~50/50 fg). bg=506568 exact.
 
 ## W14 PASS
@@ -393,7 +393,7 @@ Unique-bit pointer-jump skipped (P0d ~50/50 unique/multi; SV already ≤15 ms af
 ## T14 KILLED (Y1-class)
 command: .venv/bin/python scripts/t14_terahac.py --eps 0.1 [--cap 16384]
 Official TeraHAC control flow + S3 contact-mean (not AverageLinkageWeight).
-cap=0 (official max(n/100,1e6)): no first outer after 6 min — one giant serial SubgraphHAC. Killed.
+cap=0 (official max(n/100,1e6)): no first outer after 6 min: one giant serial SubgraphHAC. Killed.
 T14b cap=16384 heap then good-matching rewrite: no first outer after 5+ min. Killed.
 stamp data/cache/t14_outer.txt = 9999.
 Treat as Y1-class: not a G6 path on this RAG. No ε=0.05/0.02 (never reached a VOI run).
@@ -402,8 +402,8 @@ Go M16. Do not hybrid-cut.
 ## M16 FAIL
 command: .venv/bin/python scripts/m16_mutex.py
 Wolf Alg. 2 / GASP AbsMax on signed RAG (w+=mean, w-=1-mean). Wall=13.081 s.
-nseg ~421990–422041 at all four T (dendrogram cut almost no-op).
-ACCURACY GATE: FAIL all T. split 0.9097 (limits 0.40–0.63). Under-merge.
+nseg ~421990-422041 at all four T (dendrogram cut almost no-op).
+ACCURACY GATE: FAIL all T. split 0.9097 (limits 0.40-0.63). Under-merge.
 merge 0.2033 PASS (under the merge cap). Do not add min-size hunt.
 
 ## M16b FAIL
@@ -432,16 +432,16 @@ G4r ACCURACY GATE: PASS
 G6r one-shot ws=0.839 rag=0.161 agg=42.956 extract=0.480 total=44.436 FAIL (need <0.050s)
   WS 0.839 is still host API (H2D + SV + D2H). Device path proven: WS~14 ms + RAG 22 ms + extract 4.5 ms.
   AGG 43 s is still locked paper-ParHAC ε=0.08. TeraHAC and mutex did not replace it.
-G7 not run (G6r FAIL). G9 BLOCKED — no 3090 Ti.
+G7 not run (G6r FAIL). G9 BLOCKED: no 3090 Ti.
 G6 remains blocked by contact-mean ParHAC round count. Next AGG needs a new plan.
 
-## P0e–k (measure only)
+## P0e-k (measure only)
 
 P0e 7 505 458 edges. High tail is huge: mean>0.99 = 2 024 472, >0.95 = 3 551 701.
 C19 residual cannot be <50k. X2 leftover (mean>0.55 = 4 558 929) confirmed.
 P0j area: lt2=1.36M lt8=3.65M lt32=2.01M lt128=465k ge128=19k max=41044. Not a giant-area lock.
 
-P0f live BinMatch Δ=0.10 from 1.0→0.3: **every band hit the 200-round cap**.
+P0f live BinMatch Δ=0.10 from 1.0->0.3: **every band hit the 200-round cap**.
 total_rounds=1400 merges=1 525 956. High band (0.90,1.00] alone: 200 rounds / 1.09M merges and still not empty.
 P0f05/P0g skipped (f10>30). B18 is Y1-class on this RAG.
 
@@ -460,7 +460,7 @@ B18 not run as a VOI lock: 1400 match-rounds. A17 not run: P0h no drop. C19 not 
 ## Q20 PASS (serial, not a G6 lock)
 
 Stock waterz HistogramQuantileAffinity Q=50 / discretize_queue=256 on E3 fragments.
-nseg 294518/322167/345376/379876 — identical to E4 MeanAffinity heap.
+nseg 294518/322167/345376/379876: identical to E4 MeanAffinity heap.
 ACCURACY GATE: PASS (same digits as E4). This is Funke O(n) serial BinQueue, not a 10 ms path.
 Do not replace AGG lock. Parallel quantile would be B18-with-median; P0f already killed matching-until-empty.
 
@@ -483,16 +483,16 @@ G4r ACCURACY GATE: PASS
   0.4 split 0.5129 merge 0.2184 PASS
   0.5 split 0.6152 merge 0.2099 PASS
 G6r one-shot ws=0.871 rag=0.164 agg=42.130 extract=0.493 total=43.660 FAIL (need <0.050s)
-GPU AGG SKIP (no new lock with rounds≤30). G9 BLOCKED — no 3090 Ti.
+GPU AGG SKIP (no new lock with rounds≤30). G9 BLOCKED: no 3090 Ti.
 
 Matching-until-empty does not clear contact-mean bands (200-round cap on every 0.1 band). Dual-weight Wmax does not drop in 50k S4 merges. High-tail coarsen is not small. Quantile grades and is still serial. AGG lock unchanged.
 
 ## P0m/n/r (measure only)
 
-Static CC of G[mean>τ ∧ area≥a]. Graded-T subgraphs are giants:
+Static CC of G[mean>τ ∧ area>=a]. Graded-T subgraphs are giants:
 T=0.2 a=1 giant=0.992 ncc=279468 (X0); a=16 still giant=0.752.
 T=0.3 a=1 giant=0.970; T=0.4 a=1 giant=0.842; T=0.5 a=1 giant=0.623.
-No (τ=T, a≥2) cell is both non-giant and within 15% of E4 nseg. A27 skipped.
+No (τ=T, a>=2) cell is both non-giant and within 15% of E4 nseg. A27 skipped.
 High-τ CCs are safe but leave a huge residual: CC(mean>0.99) nsuper=1.07M, residual S3>0.2 = 1.51M edges (C19 rule: no S4 tail).
 mean>0.999 keep=0 (no such contacts after /255).
 P0n G[mean>0.99]: ne=2.02M nact=1.16M deg p50=2 p99=12 max=11807 giant_vfrac=0.015 (paths + a few hubs).
@@ -507,7 +507,7 @@ S0=256  0.2 split 1.050 merge 0.230
 S0=1024 0.2 split 0.779 merge 0.252
 S0=4096 0.2 split 0.663 merge 0.270; 0.4 merge 0.240>0.238
 S0=16384 0.2 split 0.583 merge 0.302; 0.3 merge 0.283>0.261
-max_vox stays ~2.0–2.1M (no X0 giant). The size cap blocks the giant and also the large–large contacts waterz takes. Structural miss. Max-face SKIP (no per-face list).
+max_vox stays ~2.0-2.1M (no X0 giant). The size cap blocks the giant and also the large-large contacts waterz takes. Structural miss. Max-face SKIP (no per-face list).
 
 ## F23 FAIL (all k)
 
@@ -538,11 +538,11 @@ Range cap does not stop the T=0.2 giant at a VOI-safe ω.
 
 ## W31 FAIL
 
-Waterfall lowest-pass union of mean>T. nseg 279468/309454/330578/355268 — identical to X0. merge VOI 7.78/7.55/6.43/4.61. Lowest-pass graph at these T is still one giant.
+Waterfall lowest-pass union of mean>T. nseg 279468/309454/330578/355268: identical to X0. merge VOI 7.78/7.55/6.43/4.61. Lowest-pass graph at these T is still one giant.
 
 ## H30 FAIL
 
-Size-doubling HEM, 20 rounds, wall=82.5 s. nseg ~917k–979k. 0.2 split 2.374 merge 0.201. Under-merge (matching-shaped). Not a lock.
+Size-doubling HEM, 20 rounds, wall=82.5 s. nseg ~917k-979k. 0.2 split 2.374 merge 0.201. Under-merge (matching-shaped). Not a lock.
 
 ## G16 (after Kruskal tree)
 
@@ -553,7 +553,7 @@ G4r ACCURACY GATE: PASS
   0.4 split 0.5129 merge 0.2184 PASS
   0.5 split 0.6145 merge 0.2100 PASS
 G6r one-shot ws=0.723 rag=0.149 agg=41.903 extract=0.485 total=43.260 FAIL (need <0.050s)
-GPU AGG SKIP (no stamped lock). G9 BLOCKED — no 3090 Ti.
+GPU AGG SKIP (no stamped lock). G9 BLOCKED: no 3090 Ti.
 
 Every G6-class ordered-UF predicate we ran (area-CC skipped by P0, SDSL, FH, SRM, X1+size, Soille, waterfall, HEM) failed VOI. Contact-mean HAC remains accurate only as a serial/Y1 algorithm on this RAG. AGG lock unchanged.
 
@@ -562,23 +562,23 @@ Every G6-class ordered-UF predicate we ran (area-CC skipped by P0, SDSL, FH, SRM
 Pinned: S26 Lu Algorithm 2 freeze, S27 lsd/daisy skip-as-product, S28 relative-contact definition.
 `data/cache/p0_leftover_block.json` branch=["L33","B34"] (R32 also a P0t candidate; run in order).
 
-P0s leftover after SDSL is small — L33 is a G6-shaped tail:
-S0=256  T=0.2 n_residual=25723 (all large–large)
+P0s leftover after SDSL is small: L33 is a G6-shaped tail:
+S0=256  T=0.2 n_residual=25723 (all large-large)
 S0=1024 T=0.2 n_residual=3314
 S0=4096 T=0.2 n_residual=645
-n_small_touch is original-edge count (not supernode residual). No S0 has residual≥50k.
+n_small_touch is original-edge count (not supernode residual). No S0 has residual>=50k.
 
-P0t relative-contact `mean>T ∧ area≥γ·min(S)^α`. Three candidates:
+P0t relative-contact `mean>T ∧ area>=γ·min(S)^α`. Three candidates:
 γ=0.10 α=0.67 all4 T=0.2 giant=0.0167 ncc=280195 (winner)
 γ=0.05 α=0.67 all4 T=0.2 giant=0.0285 ncc=279857
 γ=0.02 α=0.67 mid-only (T=0.2 giant=0.0517 just over 5%; 0.3+0.4 OK)
 Batched B=16 at the winner: T=0.2 giant=0.233 (frozen-size blows the giant).
 
-P0u frozen supernodes after interior-only Kruskal: 580k / 479k / 384k at 8³ / 16³ / 32×128×128. Intra_frac at 32×128×128 T=0.2 = 0.698. Residual inter 405k–741k. Not a <50k residual.
+P0u frozen supernodes after interior-only Kruskal: 580k / 479k / 384k at 8³ / 16³ / 32x128x128. Intra_frac at 32x128x128 T=0.2 = 0.698. Residual inter 405k-741k. Not a <50k residual.
 
 ## L33 FAIL (all S0)
 
-SDSL then S4 on leftover live S3>T. Residual is exactly the refused large–large `mean>T` edges. Heaping them rebuilds the giant.
+SDSL then S4 on leftover live S3>T. Residual is exactly the refused large-large `mean>T` edges. Heaping them rebuilds the giant.
 S0=4096 residual=645  s4_merges=490  0.2 split 0.3076 merge 1.093  nseg=279793
 S0=1024 residual=3314 s4_merges=2054  0.2 split 0.2714 merge 1.880
 S0=256  residual=25723 s4_merges=12426 0.2 split 0.1968 merge 4.455
@@ -591,12 +591,12 @@ Serial relative-contact. Closest of the tree; still both gates miss at some T.
   0.3 split 0.4618 merge 0.2792
   0.4 split 0.4891 merge 0.2570
   0.5 split 0.5304 merge 0.2350
-nseg 280195/310243/331405/356087. max_vox 3.00M at T=0.2 (no X0 giant). Serial FAIL → no batched lock. B=16 P0 already giant=0.23.
+nseg 280195/310243/331405/356087. max_vox 3.00M at T=0.2 (no X0 giant). Serial FAIL -> no batched lock. B=16 P0 already giant=0.23.
 
 ## B34 FAIL
 
-Naive 32×128×128: intra Kruskal mean>T then residual Kruskal. residual=405k. 0.2 split 0.1272 merge 7.718. X0-inside-volume after the inter tail. Skip-Lu parser originally fired; Lu-exact still run.
-Lu freeze + double-tile, 5 levels. lev=0 residual=4.64M frozen=1.80M; lev=3 residual=1.81M; lev=4 one-tile residual=0 after union-all (X0). FAIL-depth (any level residual≥50k). VOI 0.2 split 0.120 merge 7.778. Top-level heap would be Y1 (closed as Lu-as-product).
+Naive 32x128x128: intra Kruskal mean>T then residual Kruskal. residual=405k. 0.2 split 0.1272 merge 7.718. X0-inside-volume after the inter tail. Skip-Lu parser originally fired; Lu-exact still run.
+Lu freeze + double-tile, 5 levels. lev=0 residual=4.64M frozen=1.80M; lev=3 residual=1.81M; lev=4 one-tile residual=0 after union-all (X0). FAIL-depth (any level residual>=50k). VOI 0.2 split 0.120 merge 7.778. Top-level heap would be Y1 (closed as Lu-as-product).
 
 ## V35 FAIL
 
@@ -611,11 +611,11 @@ G4r ACCURACY GATE: PASS (3rd try; two prior paper-ε draws were T=0.2 merge 0.35
   0.4 split 0.5138 merge 0.2184 PASS
   0.5 split 0.6157 merge 0.2098 PASS
 G6r one-shot ws=0.721 rag=0.150 agg=42.094 extract=0.482 total=43.448 FAIL (need <0.050s)
-GPU AGG SKIP (no stamped lock). G9 BLOCKED — no 3090 Ti.
+GPU AGG SKIP (no stamped lock). G9 BLOCKED: no 3090 Ti.
 
 Leftover S4, relative-contact, block-S3, and voxel hysteresis are closed. The leftover *is* the giant; relative-contact is the nearest miss (T=0.2 merge in gate, split 0.427); block-S3 is Y1/X0; hysteresis is overseg+giant. AGG lock unchanged.
 
-## S29–S31
+## S29-S31
 
 Pinned: S29 ParHAC poly-log depth vs E6 10 ms (not a TASK number; val AGG budget ≈50 ms), S30 Hard-HAC NN-chain height escape, S31 leftover after relative-contact (thin contacts, not L33).
 
@@ -623,11 +623,11 @@ Pinned: S29 ParHAC poly-log depth vs E6 10 ms (not a TASK number; val AGG budget
 
 `data/cache/p0_gpu_inner.json`. Paper-ε 0.08: ninner=1765 layer_mean=40647 layer_max=2367715.
 Dummy scan+atomic matching on 5090: n=4e4/4e5/2.4e6 launch 0.002/0.004/0.016 ms, fused 0.00010/0.00050/0.0020 ms.
-val_proj launch=1.09 ms fused=0.105 ms (T=0.3 share 0.045 ms). Track A (fused ≤50 ms). The 20 µs E6 floor was a guess; dummy matching is far cheaper. Fused hides launch tax.
+val_proj launch=1.09 ms fused=0.105 ms (T=0.3 share 0.045 ms). Track A (fused ≤50 ms). The 20 us E6 floor was a guess; dummy matching is far cheaper. Fused hides launch tax.
 
-## E6r — VOI PASS / time FAIL (no LOCK)
+## E6r: VOI PASS / time FAIL (no LOCK)
 
-Device paper-ε 0.08 ContractLayer on the cached RAG. Live compact+combine; color hash must mix the seed through a multiply (id-parity XOR left even–even leftover uncolorable). CPU accept includes the first overflowing blue (`take=k+1`). Rebuild cluster sizes each outer.
+Device paper-ε 0.08 ContractLayer on the cached RAG. Live compact+combine; color hash must mix the seed through a multiply (id-parity XOR left even-even leftover uncolorable). CPU accept includes the first overflowing blue (`take=k+1`). Rebuild cluster sizes each outer.
 
 VOI four-T PASS (not bit-identical to host):
   0.2 split 0.3761 merge 0.3353 PASS
@@ -640,11 +640,11 @@ nseg 294162/321994/345065/379093. agg_s=3.204 s (3204 ms) vs 50 ms budget. Stamp
 
 Leftover after relative-contact (thin contacts). `data/cache/p0_r32_leftover.json`.
 γ=0.10 α=0.67: T=0.2/0.3/0.4/0.5 n_residual=85/49/24/16 n_high=0 giant_if_union=0.0188/0.0104
-γ=0.05 α=0.67: 24/10/3/4. All cells <50k → L36.
+γ=0.05 α=0.67: 24/10/3/4. All cells <50k -> L36.
 
 ## L36 FAIL (both γ)
 
-R32 then S4 on thin residual. Residual ≤5k (lock-shaped) but heaping it over-merges — same structure as L33: the leftover *is* the giant connectors.
+R32 then S4 on thin residual. Residual ≤5k (lock-shaped) but heaping it over-merges: same structure as L33: the leftover *is* the giant connectors.
 γ=0.10 residual=85 s4=73  0.2 split 0.3486 merge 0.5242
 γ=0.05 residual=24 s4=20  0.2 split 0.3443 merge 0.5089
 
@@ -654,7 +654,7 @@ P0t all-four candidate, first VOI grade. Serial: 0.2 split 0.3870 PASS merge 0.4
 
 ## P0w / N36 SKIP
 
-NN-chain S3 on the val RAG (not the 50k-edge P0i sample). All four T hit the 200-round cap. maxchain=28/26/24/24 (≤5k). rounds=200>30 → N36 KILL. No ParChain clone.
+NN-chain S3 on the val RAG (not the 50k-edge P0i sample). All four T hit the 200-round cap. maxchain=28/26/24/24 (≤5k). rounds=200>30 -> N36 KILL. No ParChain clone.
 
 ## G16 (after E6r / Track B)
 
@@ -665,13 +665,13 @@ G4r ACCURACY GATE: PASS try=1
   0.4 split 0.5130 merge 0.2184 PASS
   0.5 split 0.6145 merge 0.2100 PASS
 G6r one-shot ws=0.573 rag=0.159 agg=43.458 extract=0.497 total=44.688 FAIL (AGG budget 50 ms; e2e proxy 90 ms)
-GPU AGG SKIP (no stamped lock). G9 BLOCKED — no 3090 Ti.
+GPU AGG SKIP (no stamped lock). G9 BLOCKED: no 3090 Ti.
 
-Device paper-ε is VOI-capable at 3.2 s (64× too slow for the val AGG budget). Thin leftover after R32 is 16–85 edges and still the giant if heaped. NN-chain needs >200 parallel rounds. AGG lock unchanged.
+Device paper-ε is VOI-capable at 3.2 s (64x too slow for the val AGG budget). Thin leftover after R32 is 16-85 edges and still the giant if heaped. NN-chain needs >200 parallel rounds. AGG lock unchanged.
 
-## S32–S36
+## S32-S36
 
-Pinned: S32 clustered-graph 7–11×, S33 per-red accept, S34 Hornet idea-only, S35 Tseng exact-dynamic hardness, S36 Affinity≡E5. Unused FAIL-class list frozen. Tseng HTML at `papers/tseng_spaa2022.txt`.
+Pinned: S32 clustered-graph 7-11x, S33 per-red accept, S34 Hornet idea-only, S35 Tseng exact-dynamic hardness, S36 Affinity≡E5. Unused FAIL-class list frozen. Tseng HTML at `papers/tseng_spaa2022.txt`.
 
 ## P0y
 
@@ -679,42 +679,42 @@ Pinned: S32 clustered-graph 7–11×, S33 per-red accept, S34 Hornet idea-only, 
 wall=2929.60 ms. compact=901.60 propose=123.51 accept=1386.25 d2h=23.43 memset=25.17
 ninner=1930 nmerge=1853410. nlive mean=1.86M p50=1.38M max=7.50M.
 nprop mean=2584 max=601832; 1152/1930 inners have nprop=0 (recolor misses).
-compact+d2h+accept=2311 ms → branch E6s-a-then-b. Accept `<<<1,1>>>` is the largest slice.
+compact+d2h+accept=2311 ms -> branch E6s-a-then-b. Accept `<<<1,1>>>` is the largest slice.
 
-## E6s-a — VOI PASS / time FAIL
+## E6s-a: VOI PASS / time FAIL
 
 `k_accept_reds` one thread per red, same take=k+1. No CEN dump. compact still full-graph.
 T=0.3 agg_ms=1561. ninner=1930 merges=1853410 (bit-match E6r counts).
 nseg 294162/321994/345065/379093. ACCURACY GATE: PASS (same VOI as E6r).
 Accept tax gone (~1.4 s). Residual ~1.56 s.
 
-## E6s-b — lazy/hash/Gc killed VOI; radix-every-inner keeps VOI
+## E6s-b: lazy/hash/Gc killed VOI; radix-every-inner keeps VOI
 
 - Hash-combine + empty-outer abort: nseg ~610k, split 1.30 FAIL (under-merge).
 - Skip combine (rewrite-only, keep-ratio): merge 0.591 at T=0.2 FAIL (over-merge).
-- Paper Gc extract (inners on mean≥TL only, G not updated mid-layer): merge 4.01 at T=0.2 FAIL.
+- Paper Gc extract (inners on mean>=TL only, G not updated mid-layer): merge 4.01 at T=0.2 FAIL.
 - compact_radix (uint64 key) every inner, full G: VOI PASS, T=0.3=1596.60 ms.
   Same nseg/merges as E6r. Radix ≈ comparison sort on this size.
 
-## E6s-c — no LOCK
+## E6s-c: no LOCK
 
-Propose on ~1.8M live edges × 1930 inners is 123 ms alone (P0y), already over the 50 ms val AGG budget. Device-resident inner cannot fix that without shrinking the scanned graph, and every shrink we tried broke VOI.
+Propose on ~1.8M live edges x 1930 inners is 123 ms alone (P0y), already over the 50 ms val AGG budget. Device-resident inner cannot fix that without shrinking the scanned graph, and every shrink we tried broke VOI.
 Stamp `e6r_pass.txt` = `FAIL PASS T03_ms=1596.60 budget=50`. No LOCK.
-`segment_d` keeps host paper-ε. G16 GPU AGG SKIP. G9 BLOCKED — no 3090 Ti.
+`segment_d` keeps host paper-ε. G16 GPU AGG SKIP. G9 BLOCKED: no 3090 Ti.
 
-Residual: 1597 ms vs 50 ms (32×). Stop. No Track B leftovers, no γ/SCC/MALA/Kruskal.
+Residual: 1597 ms vs 50 ms (32x). Stop. No Track B leftovers, no γ/SCC/MALA/Kruskal.
 
-## S37–S38 / P0z
+## S37-S38 / P0z
 
-Pinned: S37 CPU `Graph.adj`/`unite_keep` = StarMerge; S38 paper L13–14 merge G **and** Gc.
-P0z T=0.3 instrument E6s-a (no merge change): wall=1703 ms (1.07× vs 1597).
+Pinned: S37 CPU `Graph.adj`/`unite_keep` = StarMerge; S38 paper L13-14 merge G **and** Gc.
+P0z T=0.3 instrument E6s-a (no merge change): wall=1703 ms (1.07x vs 1597).
 ninner=1930 n_layer=18 merges=1853410 (match E6s).
 ngc_mean=39375 p50=83.5 max=3.65M. n_dirty_blue total=19.45M. n_dirty_star total=167M.
-Go/no-go: mean n_gc≤80k and n_dirty≤50M → **E6t**. nstar>150M forbids red∪blue compact. E6t walks blues only + InsertOrUpdate.
+Go/no-go: mean n_gc≤80k and n_dirty≤50M -> **E6t**. nstar>150M forbids red∪blue compact. E6t walks blues only + InsertOrUpdate.
 
-## E6t — VOI PASS / time FAIL (no LOCK)
+## E6t: VOI PASS / time FAIL (no LOCK)
 
-GPU StarMerge: CSR+overflow adj, 8× open-address hash InsertOrUpdate, propose on updated Gc indices (`k_propose_eid`). Line 13 then 14. Rebuild hash/CSR on hash-fail or killed>50% or layer start (18 layers).
+GPU StarMerge: CSR+overflow adj, 8x open-address hash InsertOrUpdate, propose on updated Gc indices (`k_propose_eid`). Line 13 then 14. Rebuild hash/CSR on hash-fail or killed>50% or layer start (18 layers).
 
 T=0.3-only agg_ms=3008.73 (H2D inside). inner=1941 merges=1853378 (E6s was 1930 / 1853410).
 Four-T nseg 294163/322004/345052/379078 (E6s 294162/321994/345065/379093).
@@ -725,28 +725,28 @@ ACCURACY GATE: PASS
   0.5 split 0.6161 merge 0.2099
 Stamp `e6r_pass.txt` = `FAIL PASS T03_ms=3008.73 budget=50`. No LOCK.
 Slower than E6s compact-every-inner (1597 ms): hash rebuild/probe tax > full radix on this RAG.
-`segment()` stays host paper-ε. G16 GPU AGG SKIP. G8 not restamped. G9 BLOCKED — no 3090 Ti.
+`segment()` stays host paper-ε. G16 GPU AGG SKIP. G8 not restamped. G9 BLOCKED: no 3090 Ti.
 
-Residual: 3009 ms vs 50 ms (60×). StarMerge work volume was legal (P0z go); this implementation did not beat E6s wall time. No unused legal agglomerator left.
+Residual: 3009 ms vs 50 ms (60x). StarMerge work volume was legal (P0z go); this implementation did not beat E6s wall time. No unused legal agglomerator left.
 
-## P0aa — E6s-a phase split
+## P0aa: E6s-a phase split
 
-`data/cache/p0aa_e6s.json`. T=0.3, wall=1684 ms (1.05× vs 1597, keep).
+`data/cache/p0aa_e6s.json`. T=0.3, wall=1684 ms (1.05x vs 1597, keep).
 n_layer=18 ninner=1930 nmerge=1853410 hit_64=True (every layer 64 outers).
 compact=953.8 propose=96.1 pack=14.0 sort=69.3 accept=16.5 compress=81.1
 freeze=12.3 color=15.5 memset=23.8 d2h=17.3 host=0. Phase sum=1300 ms.
 Compact still dominates. Propose alone is already over the 50 ms proxy.
 
-## P0ab — outer cap 256/512
+## P0ab: outer cap 256/512
 
 Both drifted nmerge 1853400 vs locked 1853410 (drift=10). n_layer_est 16 vs 18.
 Slower (1870 / 2221 ms). Revert. `chosen_cap=64`. No four-T on drifted caps.
 
-## E6u / E6v / E6w — VOI-capable, slower than E6s (FAIL implementation)
+## E6u / E6v / E6w: VOI-capable, slower than E6s (FAIL implementation)
 
-Device-graph while (CUDA 12.8 cond node) + 4× hash StarMerge + listed pack/freeze.
-Capture cached per TL/layer. T=0.3 device_ms=9768 (6.1× vs 1597).
-inner=1562 merges=1853416 (not bit-match). Not a new agglomerator — this impl lost.
+Device-graph while (CUDA 12.8 cond node) + 4x hash StarMerge + listed pack/freeze.
+Capture cached per TL/layer. T=0.3 device_ms=9768 (6.1x vs 1597).
+inner=1562 merges=1853416 (not bit-match). Not a new agglomerator: this impl lost.
 `paper_d` defaults back to E6s (`WATERZ_PAPER_E6T` to force StarMerge).
 
 ## Gate (5090, no 3090 Ti)
@@ -754,12 +754,12 @@ inner=1562 merges=1853416 (not bit-match). Not a new agglomerator — this impl 
 E6s fallback T=0.3 CUDA-event (H2D excluded) **1294.21 ms**.
 Four-T nseg exact 294162/321994/345065/379093. ACCURACY GATE: PASS.
 Stamp `e6r_pass.txt` = `FAIL PASS T03_ms=1294.21 budget=50`. No LOCK (50 ms not met; planning target ~10 ms).
-`segment()` stays host paper-ε. G16 GPU AGG SKIP. **G9 BLOCKED — no 3090 Ti.**
-Do not write 2 Gvox/s. 5090 val AGG 1.29 s is not a 3090 Ti number and is ~26× the same-GPU 50 ms proxy.
+`segment()` stays host paper-ε. G16 GPU AGG SKIP. **G9 BLOCKED: no 3090 Ti.**
+Do not write 2 Gvox/s. 5090 val AGG 1.29 s is not a 3090 Ti number and is ~26x the same-GPU 50 ms proxy.
 
-Residual vs TASK speed: compact 954 ms on val already exceeds the entire 50 ms AGG budget. No unused legal agglomerator left. Renting a 3090 Ti now would measure ~1.78× this, not pass E9.
+Residual vs TASK speed: compact 954 ms on val already exceeds the entire 50 ms AGG budget. No unused legal agglomerator left. Renting a 3090 Ti now would measure ~1.78x this, not pass E9.
 
-## A1 — E6t/StarMerge is VOI-legal (correctness established before tuning)
+## A1: E6t/StarMerge is VOI-legal (correctness established before tuning)
 
 `scripts/a1_e6t_voi.py`, `data/cache/a1_e6t_voi.json`. Writes no stamp, so
 `segment()` path selection is untouched. Forces `WATERZ_PAPER_E6T=1` and proves
@@ -781,10 +781,10 @@ earlier E6uvw 9768 ms was an implementation defect, not an algorithmic dead end,
 so the "no unused legal agglomerator left" conclusion above is superseded.
 
 device_ms=40029 for all four T, measured with a co-tenant job holding ~11 GB at
-95% GPU utilization. **PROVISIONAL — not a speed result.** Timing under
+95% GPU utilization. **PROVISIONAL: not a speed result.** Timing under
 contention is not graded; graded timing waits for an uncontended GPU.
 
-## A2 — E6s is deterministic, E6t is not (TASK line 118 violation)
+## A2: E6s is deterministic, E6t is not (TASK line 118 violation)
 
 `scripts/a2_determinism.py`, T=0.3 only, 2 runs per path, cached rag.npz so the
 input is byte-identical by construction. Compares returned parent arrays.
@@ -792,7 +792,7 @@ input is byte-identical by construction. Compares returned parent arrays.
     E6s  byte_identical=True   ndiff=0        merges 1853427 both runs
     E6t  byte_identical=False  ndiff=397852   merges 1853416 vs 1853407
 
-397852 of 2175401 parents disagree — 18% of nodes, not float noise at the
+397852 of 2175401 parents disagree: 18% of nodes, not float noise at the
 margin. Three causes found; two fixed, one structural:
 
 1. FIXED. Proposal priority hashed the edge's array **index**. Harmless under
@@ -805,7 +805,7 @@ margin. Three causes found; two fixed, one structural:
    (`k_scale_sm_bytes`, bound 1.65e12 << 2^53), making every accumulation exact
    and order-free. ndiff 405456 -> 397852. E6s merges unchanged by the rescale
    at 1853427, confirming the quantization is benign.
-3. NOT FIXED — structural. In `k_starmarge_blue` the `is_new` branch pushes a
+3. NOT FIXED: structural. In `k_starmarge_blue` the `is_new` branch pushes a
    survivor onto a node's overflow adjacency only when *that* edge's own
    endpoints differ from the merged roots. Which racing edge wins the CAS
    therefore decides whether the survivor stays reachable at all, so the
@@ -817,11 +817,11 @@ deterministic path. E6s re-graded after fixes 1 and 2, four thresholds,
 ACCURACY GATE: PASS (split 0.3707/0.4512/0.5162/0.6129, T=0.2 better than the
 0.3779 baseline).
 
-Contention note: E6s measured 27.5 s here against 1.29 s idle — a **22x**
+Contention note: E6s measured 27.5 s here against 1.29 s idle: a **22x**
 inflation with a co-tenant at 95% GPU. No timing on this box is usable while
 that holds.
 
-## B1 — the GPU RAG was nondeterministic too, now fixed and oracle-checked
+## B1: the GPU RAG was nondeterministic too, now fixed and oracle-checked
 
 `scripts/b1_rag_determinism.py`. `csrc/rag.cu` accumulated contact sums with
 `atomicAdd` on a **float32**. Two runs on identical input:
@@ -852,7 +852,7 @@ be satisfied by a stable-but-wrong builder.
 Note `rag.npz` comes from the CPU oracle, so the AGG gates are decoupled from
 this change and the E6s VOI pass above is unaffected by it.
 
-## C1 — the 24 GB memory wall is 6.7x, not the 1.6x previously assumed
+## C1: the 24 GB memory wall is 6.7x, not the 1.6x previously assumed
 
 `scripts/c1_memory_budget.py`, `data/cache/c1_memory_budget.json`. Every
 cudaMalloc in ws.cu / rag.cu / parhac_d.cu is now routed through an in-library
@@ -1526,7 +1526,7 @@ device-to-host copy the loop already made for `nprop` by allocating the two
 counters adjacent. So the measurement is free and, being a count, it is immune
 to the co-tenant on the card.
 
-### A1 — the outer loop ran its cap on every layer
+### A1: the outer loop ran its cap on every layer
 
     for (int outer = 0; outer < max_outer; ++outer) {
 
@@ -1552,14 +1552,14 @@ drained is
     [-1, 48, 39, 41, 36, 44, 42, 46, 33, 39, 34, 36, 26, 29, 28, 28, 24]
 
 so only layer 1 genuinely needs the cap. This is 1.67x, not the 4x I guessed
-from `layer_merges` — layers do drain, just at round 24-48 rather than round 2.
+from `layer_merges`: layers do drain, just at round 24-48 rather than round 2.
 
 Gated: A2 `byte_identical=True ndiff=[0]`, ACCURACY GATE PASS at all four
 thresholds (0.2/0.3/0.4/0.5), `nseg` T=0.5 379292. The `A2 FAIL` line in that
 run is E6t, the StarMerge path already established as structurally
 non-deterministic and not used.
 
-### A3 — the real number
+### A3: the real number
 
     sum_nlive   3298578206      edges visited across inner iterations
     sum_above     77586985      of those, eligible to merge
@@ -1581,7 +1581,7 @@ merged - and only band edges can propose, so those roots are known. The band
 plus the edges incident to merged roots is a closed set, which is what makes
 restricting the sweep to it exact.
 
-## B1 — the index division was real, and removing it bought nothing
+## B1: the index division was real, and removing it bought nothing
 
 Every full-volume kernel in `ws.cu` recovered its coordinates with
 
@@ -1635,7 +1635,7 @@ depends on the interleaving. The fixed point itself is unique - it is the
 min-index connected-component labelling - so the result cannot vary, and
 `ndiff=0` across runs is the evidence.
 
-## B2 — the basin union-find was trusting a count tuned on the small volume
+## B2: the basin union-find was trusting a count tuned on the small volume
 
 `e9c_basins_d` ran a host-fixed number of rounds:
 
@@ -1666,7 +1666,7 @@ an assumption that had no evidence at 2.16 Gvox.
 Gated: C2 PASS, `ndiff=[0]`, `nfrag=2175400`, `bg=506568`,
 `array_equal=True` and `fingerprint_equal=True` against the CPU oracle.
 
-## C1 — collapsing the region-graph's duplicate atomics inside the warp
+## C1: collapsing the region-graph's duplicate atomics inside the warp
 
 The hash itself was fine (proper `mix64`, no low-bits defect), but every face
 did its own `atomicCAS` plus two `atomicAdd`s. At val that is ~84M faces
@@ -1707,7 +1707,7 @@ Gated: `edge_set_equal=True` and `count_exact=True` against the CPU oracle,
 `nedge` 7505458 as required. Watershed re-gated after the shared header moved:
 C2 PASS, `ndiff=[0]`, oracle `array_equal=True`.
 
-## A3 — the compaction was bandwidth, not hashing
+## A3: the compaction was bandwidth, not hashing
 
 I went into A3 expecting to need a dirty-set index, because A2 said 97.6% of
 edge visits are on edges that cannot merge. Reading what the compaction actually
@@ -1733,7 +1733,7 @@ allocations rather than whatever the names ended up pointing at.
 
 **The clear pass.** `k_hash_emit` already reads every slot. `k_hash_insert`
 only writes a slot after a CAS that set its key, so a slot with key 0 has
-untouched zeros in `sm` and `ct` -- which means emit can zero the slots it finds
+untouched zeros in `sm` and `ct`, which means emit can zero the slots it finds
 occupied and leave the whole table clean, including the tail above a later,
 smaller `ntab_use`. The separate clear becomes one clear after allocation.
 
@@ -1780,7 +1780,7 @@ replacement. `dnout` was an uninitialised pointer, so the emitted-edge count was
 garbage and the compaction reported an empty graph. Read the diff before
 bisecting.
 
-## B3 — measured the premise before building on it, and it did not hold
+## B3: measured the premise before building on it, and it did not hold
 
 B1 left a clean diagnosis: `k_uf_compress_c` is 64% of the plateau union-find
 (comp 317 ms of 499 ms) while moving about 2 GB, so it runs ~30x off bandwidth
@@ -1837,7 +1837,7 @@ what catches it. `vcount` is indexed by `parent[i]`, so an unflattened parent
 splits a plateau's count and undersizes its BFS queue. The last round is the
 price of proving flatness.
 
-## D3 PASS — the device-resident path, by deleting a dependency instead of installing one
+## D3 PASS: the device-resident path, by deleting a dependency instead of installing one
 
 `segment_d` had never run on this machine. It imported torch, torch is not
 installed, and TASK grades exactly this path: affinity already in VRAM, labels
@@ -1851,7 +1851,7 @@ right one was to look at what torch was being asked to do:
 That is `cudaMalloc`, a pointer, and `cudaMemcpy`. A 2.5 GB dependency was
 serving as an allocator. `segment_d` now calls the CUDA runtime through ctypes
 (`_rt()`, `DevBuf`) and reads its input through `__cuda_array_interface__`,
-which torch CUDA tensors, cupy and numba all implement — so a caller can still
+which torch CUDA tensors, cupy and numba all implement: so a caller can still
 hand it a torch tensor, we just no longer import torch to receive one. Fewer
 moving parts on the graded path, and it runs here today.
 
@@ -1867,13 +1867,13 @@ to round-trip through the host just to quantise.
 `parhac_paper_d_dev` exists and takes device pointers, but `segment_d` only
 called it `if _e6r_locked()`, and `data/cache/e6r_pass.txt` reads
 `FAIL PASS T03_ms=6841.94 budget=50`. So every `segment_d` call copied the whole
-RAG to the host and back — on a path whose entire purpose is not doing that.
+RAG to the host and back: on a path whose entire purpose is not doing that.
 The gate was also the wrong question: comparing the two entry points,
 
     parhac_paper_d      cudaMemcpy(..., cudaMemcpyHostToDevice)
     parhac_paper_d_dev  cudaMemcpy(..., cudaMemcpyDeviceToDevice)
 
-they are otherwise identical — both malloc fresh scratch and call
+they are otherwise identical: both malloc fresh scratch and call
 `parhac_e6s_dev`. Same bytes in, same kernel, so same bytes out, bit for bit;
 no experiment can distinguish them. E6r was a *speed* budget on an unrelated
 experiment being used to gate *correctness* of a different function. Now gated
@@ -1906,11 +1906,11 @@ measurement. `gradeable` is false in the JSON for both reasons (shared card,
 and cropped). The harness is what D3 owed; the number waits for an idle card.
 
 Also noted for D1: `_max_edges` floors at 20M edges, so the four edge arrays
-cost 480 MB regardless of volume — 4+4+8+8 bytes each. Narrowing `sm` and `ct`
+cost 480 MB regardless of volume: 4+4+8+8 bytes each. Narrowing `sm` and `ct`
 to uint32 halves that to 240 MB, and the same 2x applies to the scratch copy
 `parhac_paper_d_dev` makes internally.
 
-## D1 PASS — 18.5 GiB off the 2.16 Gvox peak, and the plan's estimate of it was low
+## D1 PASS: 18.5 GiB off the 2.16 Gvox peak, and the plan's estimate of it was low
 
 Started by reading the trackers nobody read. `ws.cu` and `parhac_d.cu` both wrap
 cudaMalloc in a peak counter and nothing ever called the accessors, so every
@@ -1937,7 +1937,7 @@ Four changes, each gated:
 and `parent` is a distinct array, so `out` may alias `seg` with no race. The
 last threshold now writes labels over the fragments. 8.05 GiB at 2.16 Gvox.
 Earlier thresholds still need their own buffer, so the four-threshold path is
-gated separately from the single-threshold one — both identical.
+gated separately from the single-threshold one: both identical.
 
 **The affinity is freed when the RAG is built.** It is 3n bytes and dead the
 moment the edge weights exist, but it was staying resident through the
@@ -1952,14 +1952,14 @@ reaches the table (`k_scale_sm_bytes` llrounds it at the top of each layer) and
 exact integer sums at either width. Only range is given up. The file's own note
 bounds `sm` by `255*3*nvox = 1.65e12`, far past uint32, so the fit is not
 provable and `k_hash_insert` checks each add against the width using the value
-atomicAdd returns, rather than assuming — the discipline `rag.cu` already
+atomicAdd returns, rather than assuming: the discipline `rag.cu` already
 applies to its own `isum`. Probe overflow and width overflow are separate bits
 now so one cannot mask the other.
 
 **The agglomeration works in place on the caller's edges.** This was the
 surprise, and it is worth more than narrowing every payload: `parhac_paper_d_dev`
 allocated a second complete edge set and copied device-to-device into it, so two
-full sets were live for the whole run — 2.06 GiB of pure duplicate at 2.16 Gvox
+full sets were live for the whole run: 2.06 GiB of pure duplicate at 2.16 Gvox
 plus 2 GiB of pointless copy. Thresholds are processed in one descending pass
 with snapshots, so the edges are consumed exactly once and never need to be
 pristine again; the only caller frees them immediately after. Now destructive
@@ -1983,8 +1983,8 @@ Where that leaves 2.16 Gvox, with the watershed slabbed by D2:
     stage peak agg      23.98 GiB   was 45.64 at the ws stage
 
 So it fits a 24 GiB card, and I do not believe the margin. 0.02 GiB of spare
-against a peak that is explicitly a *lower bound* — thrust allocates its own
-scratch for sort_by_key and reduce_by_key outside the tracked path — is not a
+against a peak that is explicitly a *lower bound*: thrust allocates its own
+scratch for sort_by_key and reduce_by_key outside the tracked path: is not a
 fit, it is a coincidence. The honest statement is that 2.16 Gvox now fits the
 5090's 32 GiB with room and sits exactly on the 3090 Ti's line.
 
@@ -1993,7 +1993,7 @@ Widening that margin is the payload narrowing I did not do: `tsm`, `tct`, `csm`,
 another 0.89 GiB, taking the peak to 21.72 GiB. I stopped short of it on
 purpose. Those four temporaries are swapped with `dsm`/`dct` by the A3
 buffer-swap, so they must share a type with the caller's arrays, which couples
-the change to `rag.cu`'s output and the device entry signature — it cannot be
+the change to `rag.cu`'s output and the device entry signature: it cannot be
 kept internal. That is a wide change through the part of this codebase whose
 bit-identity has cost the most to establish, for 2.26 GiB, and it cannot be
 validated where it matters: the binding stage at 2.16 Gvox is still the
@@ -2003,11 +2003,11 @@ not yet the constraint, is the wrong order. The typedef mechanism and the
 two-library gate are both in place for when it is worth doing.
 
 Also measured: `EDGES_PER_VOX = 0.055` against 0.0427 actual, a 29%
-overallocation. Not worth changing — the RAG table is
+overallocation. Not worth changing: the RAG table is
 `next_pow2(2*max_edges)`, and 0.048 and 0.055 both round to the same 268 M
 slots, so tightening it buys nothing on the table and only trims the arrays.
 
-## D2 PARTIAL — buffer sharing landed and gated; the z-slab decomposition did not
+## D2 PARTIAL: buffer sharing landed and gated; the z-slab decomposition did not
 
 Measured before rewriting, which changed what the rewrite should be. Gave
 `ws.cu`'s allocation tracker the same per-line attribution as `parhac_d.cu`'s,
@@ -2079,7 +2079,7 @@ corner index list directly and remove the array, and Flagged preserves input
 order so the list is identical to what the scatter produces. `vcount` is 4 B/vox
 indexed by root and is now the largest single item at 28.6%.
 
-## A4 — condition met, but half of it is already refuted by E12 and the other half is gated on a card I cannot get
+## A4: condition met, but half of it is already refuted by E12 and the other half is gated on a card I cannot get
 
 A4 was conditional: "only if A1+A3 fall short". They fell short, and not
 marginally. From `data/cache/p0aa_e6s.json` on val:
@@ -2127,7 +2127,7 @@ structure so a round touches candidates rather than everything. That is a
 larger change than A4 and it does not risk the partition, which makes it the
 better next move.
 
-## E3 PARTIAL — four-threshold VOI PASS, determinism PASS, memory table done; speed table blocked on an idle card
+## E3 PARTIAL: four-threshold VOI PASS, determinism PASS, memory table done; speed table blocked on an idle card
 
 The accuracy gate is the one that had to survive all of Track A and D1, and it
 did. `scripts/a1_e6t_voi.py --e6s` runs from the cached RAG rather than the
@@ -2185,7 +2185,7 @@ by design. The median-of-5 at 2.16 Gvox and 1.44 Gvox needs D2 to fit at all
 and an idle card to mean anything, and both are E1's dependency, not something
 that can be worked around here.
 
-## E1 BLOCKED — needs hardware I cannot obtain; made it a one-command run instead
+## E1 BLOCKED: needs hardware I cannot obtain; made it a one-command run instead
 
 E1 is "rent a 3090 Ti". Renting needs an account and a payment method, so it is
 not something I can execute. What I could do is remove every other reason the
@@ -2242,7 +2242,7 @@ instead of asserting it in prose. Its bottom line at 2.16 Gvox on a 3090 Ti,
 after every lever in the plan lands:
 
     V-lever work factor  3.65x
-    watershed          11435 ms  90.9% of total -- untouched
+    watershed          11435 ms  90.9% of total, untouched
     rag                  372 ms
     agglomeration        706 ms  (18.3x from 12949)
     extract               73 ms
@@ -2468,7 +2468,7 @@ replica, and all three hold across the sweep:
   `k_write_labels` gives every non-zero voxel `psum[parent[i]] + 1`, so if a
   component's minimum member had `bits == 0` it would be an unflagged root and
   `psum` at that index is some *other* fragment's label. For raw `k_flow`
-  output this is forced -- `bits[j] == 0` means every face of j is `<= low`, but
+  output this is forced, `bits[j] == 0` means every face of j is `<= low`, but
   a neighbour pointing at j does so across a face that is also one of j's and is
   `> low`. After the divide it is no longer forced, because `to_set` can point
   at a plateau interior that has just been zeroed, so it is checked explicitly.
@@ -2643,7 +2643,7 @@ the launch shape as the cause, that is where the code went. `k_hook_bidir` and
 
 The change is entirely launch geometry and staging. `vox_grid` gives a block
 256 consecutive x inside a single (y,z) row, so a block's +/-y neighbour is
-X*4 bytes away and its +/-z neighbour X*Y*4 -- 23.04 MB at 2.16 Gvox, which
+X*4 bytes away and its +/-z neighbour X*Y*4, 23.04 MB at 2.16 Gvox, which
 misses a 6 MB L2 on every one of six gathers per voxel per round, fourteen
 rounds. The tiled version takes a 32x4x4 tile with its one-voxel halo, which is
 34x6x6 = 1224 slots, stages 1224 parent words and 1224 direction bytes with 512
@@ -2662,8 +2662,8 @@ tiling changes how stale the reads are, not whether they can be.
 What would break it is dropping or inventing an edge, and a halo off-by-one is
 the obvious way to do that. So that is what got tested. `w0_ws_ref.py` now
 carries `tiled_hook_edges`, which replicates the kernel's index arithmetic
-literally -- `ws_sidx`, the `(gx, gy, gz)` bounds test, the inert `bits = 0`
-fill for out-of-volume slots -- and diffs the resulting edge set against
+literally, `ws_sidx`, the `(gx, gy, gz)` bounds test, the inert `bits = 0`
+fill for out-of-volume slots, and diffs the resulting edge set against
 `untiled_hook_edges` taken straight from `k_hook_bidir`'s source. Shapes were
 picked so tiles land unevenly on every axis: X of 33, 35 and 40 against a tile
 of 32, Y of 5, 6 and 7 and Z of 5, 8 and 9 against a tile of 4, plus a 4x4x4
@@ -3041,9 +3041,9 @@ ParHAC), not an implementation of what is already in the tree.
 command: python3 -u scripts/n0_honest_e6.py
 method: extract=3.434 ms (LOG E10); leftover 96.08 ms attributed three ways
 
-    leftover→WS (honest)   1642 ms  1.315 Gvox/s  1.52x   agg must be ≤587 ms (1.96x)
-    leftover→alloc         3692 ms  0.585 Gvox/s  3.42x   (old E6 extract dump)
-    leftover→sync          1738 ms  1.242 Gvox/s  1.61x
+    leftover->WS (honest)   1642 ms  1.315 Gvox/s  1.52x   agg must be ≤587 ms (1.96x)
+    leftover->alloc         3692 ms  0.585 Gvox/s  3.42x   (old E6 extract dump)
+    leftover->sync          1738 ms  1.242 Gvox/s  1.61x
     +WS/RAG reflect        1205 ms  1.793 Gvox/s  1.12x   (N4, not a 12x claim)
 
 Wrote data/cache/e6_recal_honest.json. Not a TASK number.
@@ -3076,7 +3076,7 @@ command: python3 -u scripts/n3_rag_structure.py
 
     mean==1 65256; mean>0.9 6.76M; mean>T 6.91M; prefilter edge cut 1.09x
     mean deg 6.90; locked visits/merge ~1152 (E2 already owns that slack)
-    prefilter mean>T: fp≠locked, work 1.19x, T=0.3 VOI PASS 0.4527/0.2513
+    prefilter mean>T: fp!=locked, work 1.19x, T=0.3 VOI PASS 0.4527/0.2513
     sat mean==1 prefix: leftover 49586, merge VOI 7.87 FAIL giant
 
 ## N4 MIRROR / SEAM
@@ -3088,7 +3088,7 @@ command: python3 -u scripts/n4_mirror_identity.py
 ## N6 STOP
 
 Wrote notes/N6_STOP.md. N5 CUDA gate: need 1.96x, best new factor 1.04
-(ε=0.40) or 1.19 (prefilter). Neither ≥1.95. No CUDA. Honest stack still
+(ε=0.40) or 1.19 (prefilter). Neither >=1.95. No CUDA. Honest stack still
 1.52x over 1080 ms after every legal lever that passed.
 
 ## P1 OFFICIAL MAKE_BIG INDEPENDENCE
@@ -3140,7 +3140,7 @@ papers: parhac_dhulipala2022.pdf p.6 §2.3, p.22-23 MultiMerge, p.23 Affinity/SC
 
     7-11x is Affinity/SCCsim GBBS vs clustered-graph, NOT ParHAC.
     E2 CSR already is MultiMerge: identical=True cut=3.86x (e2_csr_full.json).
-    layer0 ~20660 merges/outer — not the paper ε=0.01 small-round regime.
+    layer0 ~20660 merges/outer: not the paper ε=0.01 small-round regime.
     Honest stack already credits E2. start_gpu_starmarge_v2=False.
     keep_n6_on_work=True. SOURCES S32 corrected; S39 DynHAC; S40 d1 peaks.
 
@@ -3252,13 +3252,13 @@ command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_unpark.py
     median e2e 1154 ms ws 913 rag 41 agg 197 (ε=0.40 speed path)
     tracked ws 1.364 GiB; fused 2.16 pred 26.43 OVER; slab pred FITS
 command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_w5.py
-    algo 0/2/3 identity True; W5 1.63× (967→594 ms); default left 0
+    algo 0/2/3 identity True; W5 1.63x (967->594 ms); default left 0
 command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_hash.py
     parent=True; warp+SM 158 vs G15 120; full RBK 499; G15 CAS stays
 command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n8_run216.py
     official make_big [3,375,2400,2400]; idle 5090; T=0.3 ε=0.40
     e2e **13518 ms** / 0.160 Gvox/s; ws 10832 rag 433 agg 2224
-    nfrag 26104800 = 12×val. ≫2 s. Stop CUDA. notes/N8_IMPOSSIBLE.md
+    nfrag 26104800 = 12xval. ≫2 s. Stop CUDA. notes/N8_IMPOSSIBLE.md
 
 ## N9 TYPE D / CUDA KILL / BINS
 
@@ -3278,16 +3278,16 @@ command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n9_binqueue.py
     stock MEAN + BinQueue; T=0.3; fresh fragments per N
     N=256/1024/4096: split=0.455129 merge=0.241600 nseg=322314 PASS
     2175401 nodes 7505458 edges merged 1853086 each
-    no GPU bucket (no 5× visit proof; N7 visits≠wall)
+    no GPU bucket (no 5x visit proof; N7 visits!=wall)
     notes/N9_BINS.md
 
-## N10 WS SPLIT — HOST PARK WAS THE 4s
+## N10 WS SPLIT: HOST PARK WAS THE 4s
 
 command: ssh v@100.90.97.111 .venv/bin/python -u scripts/n10_ws_split.py
     idle 5090; W5; val identity True both
     park=1 ws=597.67 park=110 vcount=114 sort=2.91 unpark=44
     park=0 ws=344.25 park=0 vcount=15 sort=2.90 unpark=3
-    1.74×. Sort is 3 ms; park path is the 268 ms.
+    1.74x. Sort is 3 ms; park path is the 268 ms.
 command: WATERZ_UF_ALGO=3 WATERZ_HOST_PARK=0 WATERZ_AFF_PARK=0 \
     WATERZ_STAGE_MS=1 .venv/bin/python -u scripts/n8_run216.py
     2.16 e2e **4918 ms / 0.439 Gvox/s** (was 9213 / 0.234)
@@ -3395,24 +3395,24 @@ command: fatbin sm_86+sm_120; unset WATERZ_UF_ALGO (default 3); n8_run216
     not 2 Gvox/s, not 3090 Ti. PLAN.md is stale; this log + notes/N*.md are the trail.
 
     Where we are (N13 P0): 2.16 e2e=4915.3 ms / 0.44 Gvox/s. WS=2579 RAG=83 agg=2234.
-    Target 1080 ms on a slower 3090 Ti (1008 vs 1792 GB/s). Need ~4.5× on a faster card.
+    Target 1080 ms on a slower 3090 Ti (1008 vs 1792 GB/s). Need ~4.5x on a faster card.
 
     Voided stops (do not re-cite as theorems):
-    N8 13518 ms / N9 WS 6536 ms were host-park PCIe. Parks-off → 4918 ms (N10).
-    N9 Playne/path-halving “killed” on that 6536. Stitch now owns 52.8% NVTX; never reopened.
-    N11 “GPU BinQueue dead” was one device thread find+union 2093 ms, neighbor rewrite skipped.
+    N8 13518 ms / N9 WS 6536 ms were host-park PCIe. Parks-off -> 4918 ms (N10).
+    N9 Playne/path-halving "killed" on that 6536. Stitch now owns 52.8% NVTX; never reopened.
+    N11 "GPU BinQueue dead" was one device thread find+union 2093 ms, neighbor rewrite skipped.
     Abboud/ParHAC P-completeness does not close TASK: MEAN BinQueue N=256 VOI PASS (0.4551/0.2416).
     PRUF 800 Mvox / 2.5 s is grayscale Meyer, not waterz S1.
 
     This-stack facts that survive:
-    Time ∝ voxels on official 3×2×2 (nfrag=12×val). Mutex/Kruskal/ε≥0.5/X1/SubgraphHAC VOI FAIL.
-    E6t VOI PASS, byte_identical=False, 14× slower. E4 identity True, flatten 76.6% of stitch.
+    Time ∝ voxels on official 3x2x2 (nfrag=12xval). Mutex/Kruskal/ε>=0.5/X1/SubgraphHAC VOI FAIL.
+    E6t VOI PASS, byte_identical=False, 14x slower. E4 identity True, flatten 76.6% of stitch.
     Zeroing E6s dirty-scan 1598 ms leaves e2e ≈ 3326 ms. Optimistic T1+T3 composition ≈ 1.9 s
     on 5090 (still short of 2.0, wrong card).
 
     Stale claims (logged, not re-litigated):
-    N10 “E4 untried” / N11 “2.16 skipped” superseded by N12/N13 ~4590 ms.
-    WATERZ_AGG_LEVERS comment “none run on device” stale; scripts set 15; lib default 0.
+    N10 "E4 untried" / N11 "2.16 skipped" superseded by N12/N13 ~4590 ms.
+    WATERZ_AGG_LEVERS comment "none run on device" stale; scripts set 15; lib default 0.
     w5_union_find cudaMalloc CUB tmp + stitch list inside timed event.
     N12 val nsys dump empty (stale sqlite). Fused 2.16 pred 26.4 GiB OVER 24; 5090 has 32 GB,
     never timed; cannot ship for 3090 24 GB (z-slab WSMEM 11.5 GiB is the fit path).
@@ -3456,7 +3456,7 @@ command: fatbin sm_86+sm_120; unset WATERZ_UF_ALGO (default 3); n8_run216
         jump_rounds=2/64. 2.16 WS=2581.6 cut=0.999. keep_default=False. notes/N15_T3.md
     T4 e9b-only fold: FOLD_FLATTEN=1 E9B_FOLD_ONLY=1 share on. ident True.
         2.16 WS=2244.0 cut=1.149 < 1.2. keep_default=False. notes/N15_T4.md
-    T5 hook-to-root: HOOK_ROOT=1. ident True. stitch_rounds 5→4. peak 1.47 GiB.
+    T5 hook-to-root: HOOK_ROOT=1. ident True. stitch_rounds 5->4. peak 1.47 GiB.
         2.16 WS=2105.4 cut=1.225. keep_default=True. C++ default stays off. notes/N15_T5.md
     T2+T5 stack: ident True. 2.16 WS=1311.4 cut=1.967 e2e=3639.8 nlab=3860788.
         keep_default=True on WS 1.2x. notes/N15_T2T5.md
@@ -3469,14 +3469,14 @@ command: fatbin sm_86+sm_120; unset WATERZ_UF_ALGO (default 3); n8_run216
         keep_default=False (retracted). notes/N15_T8.md
     T9 E6s MAX_OUTER=32: T=0.3 VOI PASS merge 0.26095 (wall 0.2611). agg=2115.7 cut=1.056.
         2.16 nlab=3860720. keep_default=False. notes/N15_T9.md
-    T10 CUDA graph G2: not implemented. E−K=336 ms; 2234−336=1898>1862. keep_default=False.
+    T10 CUDA graph G2: not implemented. E-K=336 ms; 2234-336=1898>1862. keep_default=False.
         notes/N15_T10.md
     T11 stitch arena: not implemented. T2+T5 already 1.96x WS. keep_default=False.
         notes/N15_T11.md
-    T12 persistent stitch: not implemented. 4-byte D2H ×4 after T5. keep_default=False.
+    T12 persistent stitch: not implemented. 4-byte D2H x4 after T5. keep_default=False.
         notes/N15_T12.md
     T13 drop vcount: not run. ~178 ms vs stacked WS 1313. keep_default=False. notes/N15_T13.md
-    T14 SortPairs: not run. 20–40 ms. keep_default=False. notes/N15_T14.md
+    T14 SortPairs: not run. 20-40 ms. keep_default=False. notes/N15_T14.md
     T15 fuse pack_amask: not run. T8 four-T FAIL. keep_default=False. notes/N15_T15.md
 
     Legal stack T2+T5+T6 (T8 excluded): ident True, T=0.3 VOI identical to N13, run2 True.
@@ -3508,7 +3508,7 @@ command: fatbin sm_86+sm_120; unset WATERZ_UF_ALGO (default 3); n8_run216
         cut=0.999 nlab=3860788. keep_default=False. notes/N16_T11.md
 
     T12 pin changed: PIN_CHANGED=1 + T2T5. ident True. 2.16 stitch
-        e9b ~137s ×3 + e9c ~206s ×3. WS=1028996.16 nlab=3860788.
+        e9b ~137s x3 + e9c ~206s x3. WS=1028996.16 nlab=3860788.
         mapped atomicExch on changed. keep_default=False. notes/N16_T12.md
 
     T13 drop k_count_v2: not removed. T14/deep 2.16 vcount=177.8 ms.
@@ -3531,7 +3531,7 @@ command: fatbin sm_86+sm_120; unset WATERZ_UF_ALGO (default 3); n8_run216
         nlab=3860788 both. a: e2e=3345.18 WS=1312.02 agg=1929.00
         b: e2e=3323.68 WS=1310.32 agg=1911.37
         ws_peak=14193138368 (13.22 GiB). 3090 24GB not measured.
-        keep_default=False (agg misses 1.2× by 67 ms).
+        keep_default=False (agg misses 1.2x by 67 ms).
         C++ defaults unchanged: UF=3, parks off, ε=0.40/0.08, compact k=0,
         fold/share_off/hook_root/fuse_dirty/nlive_arith/arena/pin/sort_pack/fuse_pack
         getenv still default 0.
@@ -3591,17 +3591,17 @@ claim: not a 2 Gvox/s number; not 3090 Ti. Parks off. VRAM cleared of VLLM for r
 - voi_only harness; identity diagnostic True (not ship-gate)
 - four-T PASS; 2.16 ws=1314.7 agg=1683.2 e2e=3104.1 keep_default=True (env)
 
-### A2–A5 (WS ladder) — STOP, no WS≤900
+### A2-A5 (WS ladder): STOP, no WS≤900
 - A2 VCOUNT_COMPACT: voi ok; four empty/fail; kill
 - A3 TIE_FLIP: four PASS; 2.16 ws_label_d rc=-3; kill
 - A4 COARSE_DELTA=8: four PASS; 2.16 rc=-3; no WS cut; kill
 - A5 BLOCK_VOI: four fail/empty; kill
-- notes/N18_A_STOP.md: freeze WS; EV → Track B
+- notes/N18_A_STOP.md: freeze WS; EV -> Track B
 
-### B0–B3
+### B0-B3
 - B0: n18_nsys.json / N18_A0_NSYS.md
 - B1 parallel BinQueue: 2253ms wall, VOI FAIL, kill (not serial reopen)
-- B2 eps 0.41–0.49: all T=0.3 merge FAIL; best_eps=None
+- B2 eps 0.41-0.49: all T=0.3 merge FAIL; best_eps=None
 - B3 COMPACT_EVERY=8: four PASS; agg=1765 (worse vs N17 1690); cut -75ms; ParHAC local max; kill
 
 ### C
@@ -3609,7 +3609,7 @@ claim: not a 2 Gvox/s number; not 3090 Ti. Parks off. VRAM cleared of VLLM for r
 
 ### Honest ceiling (5090)
 - best e2e ~3104 ms / ~0.70 Gvox/s (A1 = N17 stack)
-- need ~2.9× on 5090 (~5× bw-scaled to 3090 Ti) still open
+- need ~2.9x on 5090 (~5x bw-scaled to 3090 Ti) still open
 
 ## N19_I0_REPRO
 claim: not a 2 Gvox/s number; not 3090 Ti
@@ -3628,7 +3628,7 @@ rc=4 keep=None ws=0 agg=0 e2e=0
 claim: not a 2 Gvox/s number; not 3090 Ti. Parks off.
 
 ### I0 PASS
-- nsys force-export → n19_owners.json (40 kern); top: compress_list 508, hash_rewrite 287, rebuild 278
+- nsys force-export -> n19_owners.json (40 kern); top: compress_list 508, hash_rewrite 287, rebuild 278
 - I0_REPRO e2e=3093.4 (A1 3104 ±2%); four-T PASS; keep_default=True
 
 ### W_STOP
@@ -3650,8 +3650,8 @@ honest: ~0.70 Gvox/s ceiling unchanged; never claim 2 Gvox/s from 5090
 
 claim: not a 2 Gvox/s number; not 3090 Ti
 
-- notes/ATLAS.md — Part I chronology + Part II findings (pinned)
-- data/cache/voi_atlas.csv + voi_atlas.json — 97 rows; rebuild: scripts/build_voi_atlas.py
-- scripts/legal_eval.sh — N17 env + dual-ε four-T / voi_only
-- notes/PROBLEM.md — remaining precise problem + ruled-out attacks
+- notes/ATLAS.md: Part I chronology + Part II findings (pinned)
+- data/cache/voi_atlas.csv + voi_atlas.json: 97 rows; rebuild: scripts/build_voi_atlas.py
+- scripts/legal_eval.sh: N17 env + dual-ε four-T / voi_only
+- notes/PROBLEM.md: remaining precise problem + ruled-out attacks
 - README.md aligned to N17 dual-ε; explicit not-3090 / not-2Gvox

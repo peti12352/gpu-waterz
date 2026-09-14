@@ -166,7 +166,7 @@ __global__ void k_binq_merge(
         const uint32_t b = (uint32_t)s_b;
         // Walk b's incidence. Thread 0 does the list splice (adjacency is not
         // lock-free); other threads only exist so this is a block, not a
-        // 1-thread grid. The walk is still serial per merge — FIFO requires it.
+        // 1-thread grid. The walk is still serial per merge: FIFO requires it.
         if (threadIdx.x == 0) {
             int h = head[b];
             head[b] = -1;

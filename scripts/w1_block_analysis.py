@@ -11,12 +11,12 @@ That is measurable without a GPU and without the affinity volume, because the
 watershed output is cached: data/cache/gpu_fragments.npy is the 125x1200x1200
 label volume from the device run. This counts, exactly:
 
-  - the fraction of blocks that are internally uniform, which is the label
+ - the fraction of blocks that are internally uniform, which is the label
     reduction actually available;
-  - the number of face-adjacent voxel pairs in the same fragment, which is what
+ - the number of face-adjacent voxel pairs in the same fragment, which is what
     the current per-voxel union-find has to resolve, against the number of
     block-level unions that replace them;
-  - the L2 residency arithmetic at 2.16 Gvox, which is the reason the plan
+ - the L2 residency arithmetic at 2.16 Gvox, which is the reason the plan
     wants this at all.
 
 The last one is worth checking rather than repeating: a block-label z-plane at

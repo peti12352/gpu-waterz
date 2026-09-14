@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N4: make_big seam / reflect identity. Not a 12× throughput claim.
+"""N4: make_big seam / reflect identity. Not a 12x throughput claim.
 
 make_big.py is not in the tree. The tarball README specifies the transform:
 flip every channel along the mirrored axis, then shift that axis's own
@@ -8,7 +8,7 @@ transform, proves the seam is identically zero, counts seam faces on a
 2-tile fragment construction, and shows a zero-affinity seam cannot
 create a mean>T RAG edge.
 
-Do not treat this as 12× e2e. Agglomeration still has to run on the
+Do not treat this as 12x e2e. Agglomeration still has to run on the
 union graph unless the seam is proven merge-irrelevant (mean=0).
 """
 from __future__ import annotations
@@ -128,7 +128,7 @@ def main():
     # RAG identity under a zero seam: internal edges of each tile are a
     # reflected copy; seam edges have mean=0 and never satisfy mean>T.
     # Union agglomeration ≡ two independent copies. This is identity of
-    # the *merge relation*, not a 12× wall-clock claim on a 3090 Ti.
+    # the *merge relation*, not a 12x wall-clock claim on a 3090 Ti.
     out = {
         "make_big_present": False,
         "affinity_present": False,
@@ -142,7 +142,7 @@ def main():
             "throughput_12x": False,
             "note": "Stamping a finished val segmentation 12 times is "
                     "correct for merge-equivalence iff seams stay mean=0. "
-                    "Wall time is still val e2e × (5090/3090 bw), not "
+                    "Wall time is still val e2e x (5090/3090 bw), not "
                     "val/12. Do not claim 2 Gvox/s from this.",
         },
         "pass": all_zero,

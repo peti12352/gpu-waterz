@@ -17,7 +17,7 @@ Parks off on the timed path.
 
 ---
 
-## Part I  -  Research report and log
+## Part I: Research report and log
 
 ### 1. Quality and throughput targets used in this campaign
 
@@ -56,7 +56,7 @@ flowchart TD
   cpu --> parhac --> gpuws --> parks --> legal --> n18 --> n19
 ```
 
-#### Phase A  -  Spec and oracles (T0-E4)
+#### Phase A: Spec and oracles (T0-E4)
 
 Pin: LOG `## T0` ... `## E4`.
 
@@ -65,7 +65,7 @@ Pin: LOG `## T0` ... `## E4`.
 - Exact S4 heap on those fragments PASSes VOI (E4). C++ heap port was +0.017 merge at 0.2 and was rejected.
 - Threshold unit locked from shipped `baseline/run_baseline.py` (THRESHOLD.md).
 
-#### Phase B  -  Partition-class massacre
+#### Phase B: Partition-class massacre
 
 Same cached RAG (`data/cache/rag.npz`), official grader. Not "we didn't tune k". Full rows: [voi_atlas.csv](../data/cache/voi_atlas.csv).
 
@@ -88,7 +88,7 @@ Same cached RAG (`data/cache/rag.npz`), official grader. Not "we didn't tune k".
 | eps>=0.5 ParHAC | N12 | T=0.3 merge 0.271-0.87 | N12_OFF |
 | eps in (0.41,0.49) | N18 B2 | **all nine** T=0.3 merge FAIL (0.265-0.291 vs 0.2611) | [N18_B2.md](N18_B2.md) |
 
-#### Phase C  -  The accuracy lock that survived
+#### Phase C: The accuracy lock that survived
 
 Contact-mean **(1+eps) ParHAC**. Pins: LOG `## Y2 PASS`, `## E2`, `## E3`; SOURCES S29, S32.
 
@@ -109,11 +109,11 @@ Locked four-T table (N16 deep, independent official regrade, [N16_DEEP.md](N16_D
 
 Byte-identical table vs T7 and T15 regrades. N17 EMIT_HOLES does not change the partition (2.16 label sha identical to N16).
 
-#### Phase D  -  Device watershed that matches S1
+#### Phase D: Device watershed that matches S1
 
 Host S1 plateau stayed the accuracy path until E9c/W15: GPU flow + corner BFS + basin UF, **nfrag=2175400, bg=506568, array_equal vs `wz_fragments.npy`** (LOG `## W15 PASS`). Extra closed plateaus are a VOI fail, not a speed trick (E1: nfrag 2 210 180, merge FAIL at 0.2/0.3/0.4). W5 list UF (Chen face domain) is the later WS kernel.
 
-#### Phase E  -  Measurement failures (the real log)
+#### Phase E: Measurement failures (the real log)
 
 These wasted more calendar time than any kernel.
 
@@ -122,9 +122,9 @@ These wasted more calendar time than any kernel.
 3. **Identity vs TASK.** Waterz is not self-identical. N18/N19 `voi_only`: identity is diagnostic; four-T is the ship bar. A4 coarse changed basins (nfrag 3 136 975 vs 2 175 400) even when T=0.3 VOI looked OK (`n19_dead.jsonl` N18_A4).
 4. **Empty nsys.** N18 dump empty without `--force-export`. N19 I0 fixed it ([N19_I0_NSYS.md](N19_I0_NSYS.md)). Without owners, W1/W3 would have been ground as Playne/hist noise (hook 84.5 ms, vcount 148 ms).
 5. **Co-tenant / VLLM.** README historically: one workload 1634-5018 ms (3.1x). `card_busy` refuse + `n18_free_gpu.sh` became harness law. Never claim 5090 as 3090.
-6. **Fused 2.16 WS peak ~42 GiB** (SOURCES S40 / `d1_mem.py`). Listing's "~9 GB leftover" is 24-15.1, not measured stage peaks. Z-slab N=3 (Z=125, aff=0 seams) is the fit path; 8-tile serial was 8.3x and is dead. SHARE_OFF is +4 B/vox  -  C++ defaults frozen until 3090 peak.
+6. **Fused 2.16 WS peak ~42 GiB** (SOURCES S40 / `d1_mem.py`). Listing's "~9 GB leftover" is 24-15.1, not measured stage peaks. Z-slab N=3 (Z=125, aff=0 seams) is the fit path; 8-tile serial was 8.3x and is dead. SHARE_OFF is +4 B/vox: C++ defaults frozen until 3090 peak.
 
-#### Phase F  -  Legal stack climb (N13->N17)
+#### Phase F: Legal stack climb (N13->N17)
 
 Parks off, env-gated levers, four-T before 2.16.
 
@@ -147,11 +147,11 @@ WATERZ_FOLD_FLATTEN=1 SHARE_OFF=1 HOOK_ROOT=1 FUSE_DIRTY=1 NLIVE_ARITH=1 EMIT_HO
 
 eps=0.40 on the T=0.3 speed path; eps=0.08 on four-T.
 
-#### Phase G  -  N18 VOI-first
+#### Phase G: N18 VOI-first
 
 [N18_SUMMARY.md](N18_SUMMARY.md). A2-A5 no WS<=900 with four-T. B1 parallel BinQueue wall 2253 + VOI FAIL. B2 eps grid dead. B3 COMPACT_EVERY=8 **slower** (agg 1765 vs 1690). ParHAC local max ~1690 ms agg.
 
-#### Phase H  -  N19 literature EV
+#### Phase H: N19 literature EV
 
 [N19_SUMMARY.md](N19_SUMMARY.md). Owners known (`n19_owners.json`, 40 kernels). W1/W3 skipped (owner <200 ms). W2 skip (no flag/scan >=200). H1 bin-ladder 5841 ms + VOI FAIL. H2 NNG VOI FAIL. H3 RNN stamped unimplemented (honest; not a silent skip). H4 simplified freeze != ParHAC parents (321856 vs 309455 roots). X1-X3 stamped, no 2.16 on FAIL. C REFUSE on 5090.
 
@@ -177,10 +177,10 @@ Owner map (N19 force-export, [N19_I0_NSYS.md](N19_I0_NSYS.md) / `n19_owners.json
 | `k_rewrite_dirty_fuse` | 273.0 | 9.9 | dirty fuse (438) |
 | `k_hash_insert` | 173.6 | 6.3 | hash insert |
 | `k_hash_emit_holes` | 161.1 | 5.9 | EMIT_HOLES |
-| `k_count_v2` | 148.1 | 5.4 | vcount  -  below 200 ms kill |
+| `k_count_v2` | 148.1 | 5.4 | vcount: below 200 ms kill |
 | `k_propose_listed` | 146.8 | 5.3 | propose |
-| `k_w5_hook_list` | 84.5+82.1 | ~6 | hook  -  below 200 ms kill |
-| CUB radix onesweep | 31.6 | 1.1 | sort  -  below 200 ms kill |
+| `k_w5_hook_list` | 84.5+82.1 | ~6 | hook: below 200 ms kill |
+| CUB radix onesweep | 31.6 | 1.1 | sort: below 200 ms kill |
 
 NVTX: `w5_stitch` 835 ms (range, not a single kernel), BFS/`k_indep_bfs` ~14 ms of 2.16 WS.
 
@@ -246,39 +246,39 @@ N21 stamps: [n21_dead.jsonl](../data/cache/n21_dead.jsonl). Cite [N21_WIN.md](N2
 
 ---
 
-## Part II  -  Contributions and findings
+## Part II: Contributions and findings
 
 Capture failure is the current risk: until this file, the work lived in a 3600-line LOG. Ranked by gap type (fracture framework).
 
-### Finding 1  -  Type E: the speed problem was (partly) PCIe and bookkeeping
+### Finding 1: Type E: the speed problem was (partly) PCIe and bookkeeping
 
 N8's "impossible" 0.16 Gvox/s was HOST_PARK + AFF_PARK + booking aff H2D as RAG. Parks off doubled throughput without changing the partition (4918 ms, 0.44 Gvox/s). Community value: **any GPU connectomics timing that D2H's the affinity or parks hundreds of millions of indices through the CPU is not a watershed result.**
 
-### Finding 2  -  Type D: algorithm-class x VOI atlas on the waterz RAG
+### Finding 2: Type D: algorithm-class x VOI atlas on the waterz RAG
 
 Same 7.5 M-edge CREMI-A contact-mean RAG, same shipped grader, four thresholds, both VOI halves. Frozen CC / mutex / Kruskal / FH / SRM / Soille / TeraHAC-control-flow / RAMA / GASP Average / NNG / extra-plateau-CC fail in **structurally different** ways (giant vs under-merge vs timeout vs order-change). This table does not exist in Wolf, Bailoni, Dhulipala, or Funke. Cite [voi_atlas.csv](../data/cache/voi_atlas.csv).
 
-### Finding 3  -  Type C: (1+eps) contact-mean ParHAC is the only parallel class that four-T PASSed
+### Finding 3: Type C: (1+eps) contact-mean ParHAC is the only parallel class that four-T PASSed
 
 eps=0.08 four-T / eps=0.40 T=0.3 is an empirical phase boundary, not a hyperparameter. Crossing 0.40 at T=0.3 fails merge for **every** 0.01 step to 0.49. GPU port of paper ParHAC (matching + S3 contract + dual path) with four-T PASS and byte-identical 2.16 labels is, as of the SOURCES sweep (`arXiv all:ParHAC AND all:GPU` = 0 on 2026-09-06; S42), the first public CUDA ParHAC-like agglomerator on this statistic.
 
-### Finding 4  -  Type A applied (not proved here): exact MEAN will not close the bounty
+### Finding 4: Type A applied (not proved here): exact MEAN will not close the bounty
 
-Abboud/ParHAC theorems already say exact average-linkage has no poly-log parallel algorithm under standard assumptions (SOURCES S17, S29). N19 H1-H4 are the engineering corroboration: bin-ladder slower+VOI-fail; NNG changes merge order; simplified Lu freeze != dendrogram; RNN not even implemented (N20 later implemented S3 RNN; height 12539 and cap 5000 still kill it as a closer). Scope: this does **not** prove 2 Gvox/s is impossible  -  TASK allows approximate order. It proves **exact-heap GPU** is the wrong closer.
+Abboud/ParHAC theorems already say exact average-linkage has no poly-log parallel algorithm under standard assumptions (SOURCES S17, S29). N19 H1-H4 are the engineering corroboration: bin-ladder slower+VOI-fail; NNG changes merge order; simplified Lu freeze != dendrogram; RNN not even implemented (N20 later implemented S3 RNN; height 12539 and cap 5000 still kill it as a closer). Scope: this does **not** prove 2 Gvox/s is impossible: TASK allows approximate order. It proves **exact-heap GPU** is the wrong closer.
 
-### Finding 5  -  Type E: plateau grouping, not BFS, owns watershed
+### Finding 5: Type E: plateau grouping, not BFS, owns watershed
 
 BFS is **~14 ms** of 2.16 WS (`k_indep_bfs`). `k_w5_compress_list` is **508 ms**. N9 killed Playne/halving because they cannot close 12x; they were aimed at the 5 ms BFS. Extra closed-plateau CCs fail VOI (E1). **S1 plateau semantics are load-bearing; the BFS rewrite is not the timed owner.**
 
-### Finding 6  -  Type D: memory is stage-maxima, not 15.1+scratch
+### Finding 6: Type D: memory is stage-maxima, not 15.1+scratch
 
 Measured: WS fused pred ~42 GiB at 2.16; after lifetime cuts + z-slab, legal stack WS peak **13.22 GiB** (N17_DEEP). Listing leftover math is not a fit theorem. Buffer sharing saved **21.95 GiB** of double-counting (README memory table, still valid as an accounting). 3090 24 GB still **unmeasured**. SHARE_OFF is +4 B/vox; do not flip C++ defaults.
 
-### Finding 7  -  Methodology (reusable lab infrastructure)
+### Finding 7: Methodology (reusable lab infrastructure)
 
 `voi_only` vs `ident`; four-T before 2.16; owner >=200 ms; `n19_dead.jsonl`; `card_busy` refuse; subprocess-per-env; abort stamps; claim string "not a 2 Gvox/s number; not 3090 Ti". This is how the negative results stayed honest.
 
-### Finding 8  -  Type C/D: N20 closed unused mean-HAC classes (2026-09-12)
+### Finding 8: Type C/D: N20 closed unused mean-HAC classes (2026-09-12)
 
 Parser table S43: no unused GPU mean-HAC replaces contact-mean ParHAC under
 four-T VOI. Measured on greengoblin, idle CPU, no GPU kernels:
@@ -298,7 +298,7 @@ Optimistic leftover if rebuild+fuse vanish is **~1128 ms**, not ~840
 (NVTX double count). Cite [N21_WIN.md](N21_WIN.md).
 
 
-### Finding 9  -  Type E: listed domain does not delete dense rewrite or fat lists
+### Finding 9: Type E: listed domain does not delete dense rewrite or fat lists
 
 D0: median ndirty/nscan=0.018 and nact/nscan=0.003, so listed insert/rebuild
 were legal. Early inners are not sparse (ndirty/nscan=0.75). A1/A2/A4
@@ -327,7 +327,7 @@ Official shipped grader (writes `mine_thr*.h5`): `scripts/eval.sh` / `scripts/le
 
 ---
 
-## Part III  -  Honest ceiling and what not to grind
+## Part III: Honest ceiling and what not to grind
 
 Best e2e **~0.70 Gvox/s on a 5090**. WS floor ~1310 ms > 1080 ms TASK budget.
 Unique remaining owners: compress_list 508 (fat list, hop_max=9) + rewrite 273

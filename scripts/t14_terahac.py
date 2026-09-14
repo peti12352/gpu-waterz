@@ -118,7 +118,7 @@ def main():
     if not ok:
         raise SystemExit(1)
     if mx > 80:
-        print("T14 outer>80 after this cap — Y1-class, go M16")
+        print("T14 outer>80 after this cap: Y1-class, go M16")
         raise SystemExit(3)
 
 

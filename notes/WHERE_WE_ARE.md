@@ -35,7 +35,7 @@ affinity 0.3, CUDA events, affinity already on the GPU, parks off.
 | **end-to-end** | **3093.4 (~0.70 Gvox/s)** |
 
 Four-threshold VOI: PASS. Two full runs produce the same labels.
-Watershed identity: 2,175,400 fragments, fingerprint `fff9037c…`.
+Watershed identity: 2,175,400 fragments, fingerprint `fff9037c...`.
 Agglomeration at affinity 0.3: VOI split 0.4408 / merge 0.2543
 (limits 0.4738 / 0.2611), 538 inner iterations, 1,853,545 merges.
 
@@ -46,8 +46,8 @@ The same agglomerator on the small cached region graph (not 2.16) takes
 
 ## Remaining paths
 
-The open problem is still: **same partition quality, less wall time** — or
-a proof that this watershed + contact-mean ParHAC split cannot get there.
+The open problem is still the same partition quality in less wall time,
+or a proof that this watershed plus contact-mean ParHAC cannot get there.
 
 What is actually left:
 
@@ -74,12 +74,12 @@ What is actually left:
 4. **Shipping the identity-true env flags.** Listed insert/rebuild and
    occupied-slot emit match the current parents and pass four-threshold VOI.
    Stacked (N23 A0) they cut 2.16 agg to **1622-1624 ms** vs 1679.9, with
-   only 17 ms on val -- the 100 ms val gate would have skipped them.
+   only 17 ms on val, so the 100 ms val gate would have skipped them.
    Turning them on by default is a product choice, not a path off the
    1680 ms class. Contact-mean CSR rewrite is identity-true and **slower**
    (N23 A1: 2.16 agg 23240 ms); do not default `WATERZ_CSR_REWRITE`.
 
-Shrinking the watershed compress list (508 ms, 71–105 million entries) is
+Shrinking the watershed compress list (508 ms, 71-105 million entries) is
 **not** an open speed path unless fragment identity is allowed to change.
 The hook list has to keep both plateau faces and phase-1 roots.
 
@@ -93,11 +93,11 @@ port pointless. Timing vs 1679.9 ms only when the card is idle.
 
 | Attempt | What the evidence says | Where |
 |---|---|---|
-| A different merge rule (Kruskal, mutex, GASP, NNG, complete-link, WPGMA, Ward, …) | Different partition; VOI fails or the statistic is not contact-mean | atlas, N19 H2/X*, N20 X4/X5/REFUSE |
-| Exact mean heap / RNN / NN-chain as a 1680 ms closer | Dendrogram height 12,539; RNN hit a 5,000-round cap on every threshold; parents ≠ heap; four-T fail | N20 D2, D3, RNN |
+| A different merge rule (Kruskal, mutex, GASP, NNG, complete-link, WPGMA, Ward, ...) | Different partition; VOI fails or the statistic is not contact-mean | atlas, N19 H2/X*, N20 X4/X5/REFUSE |
+| Exact mean heap / RNN / NN-chain as a 1680 ms closer | Dendrogram height 12,539; RNN hit a 5,000-round cap on every threshold; parents != heap; four-T fail | N20 D2, D3, RNN |
 | StarMerge / E6t clustered rewrite | First layer is **71%** of all merges (1.32M / 1.85M) at eps=0.08; denser at 0.40. Small-merge assumption is false here | N20 D1, STAR |
-| Spatial Lu Alg 2 | Four-T passes, but parents ≠ heap, ~3.86M of 7.5M edges left, **6645 s** on CPU | N20 LU2 |
-| Looser merge allowance (eps 0.41–0.49 or ≥0.5) | Merge VOI fails on affinity 0.3 | N18 B2 |
+| Spatial Lu Alg 2 | Four-T passes, but parents != heap, ~3.86M of 7.5M edges left, **6645 s** on CPU | N20 LU2 |
+| Looser merge allowance (eps 0.41-0.49 or >=0.5) | Merge VOI fails on affinity 0.3 | N18 B2 |
 | Bin-queue agglomeration | Hang, or 2253 ms and VOI fail | N18 B1, n19_dead |
 | Playne / list-halving / jump-flatten / mapped-host atomics / grayscale PRUF as S1 | Wrong basins, ~1e6 ms, or a different watershed | n19_dead, N12 |
 | "Just compact more / insert-only / fuse-pack / cuda graphs / sticky size" | Noise, illegal identity, or **slower on 2.16** (compact-every-8: 1765 vs 1690) | N18 B3, n19_dead |
@@ -105,7 +105,7 @@ port pointless. Timing vs 1679.9 ms only when the card is idle.
 | Occupied-slot hash emit as a 2.16 closer | Solo 18 ms val / stack 62 ms val; stacked A5 **does** 2.16 at 1622-1624 vs 1679.9; keep_default false | N22 A3, N23 A0 |
 | Contact-mean linked-list CSR rewrite | CPU splice equals scan; GPU identity+four PASS; 2.16 agg **23240 ms**; gather pointer-chase | N23 D0, N23 A1 |
 | Skip empty hash slots with CUB DeviceSelect | Still reads the whole table | N22 D0 |
-| Compress only union-find roots / jump pointers in the watershed list | Roots are 4–55% of the list; jump-4 was **6 ms slower** on val watershed. Cost is list length, not hop height | N21 W1, W2, W3 |
+| Compress only union-find roots / jump pointers in the watershed list | Roots are 4-55% of the list; jump-4 was **6 ms slower** on val watershed. Cost is list length, not hop height | N21 W1, W2, W3 |
 | Grind `k_copy_sz_list` | Already walks only live roots; needed for the freeze test; skipping it (sticky sz0) fails VOI | N22 COPY_SZ |
 
 Do not launch `csrc/n20_rnn_gpu_prep.cu`. Do not default

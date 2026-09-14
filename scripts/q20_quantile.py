@@ -31,7 +31,7 @@ def main():
     dest_dir = OUT / "q20_quantile"
     dest_dir.mkdir(parents=True, exist_ok=True)
     paths = []
-    # Copy on each yield — waterz reuses one buffer (list() would alias the last).
+    # Copy on each yield: waterz reuses one buffer (list() would alias the last).
     for lab, score in zip(
         waterz.agglomerate(
             aff,

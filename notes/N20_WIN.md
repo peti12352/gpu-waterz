@@ -1,4 +1,4 @@
-# N20 finish -- where we are
+# N20 finish: where we are
 
 Campaign closed on greengoblin 2026-09-12T00:23:44+02:00. Host idle at
 audit 2026-09-13T15:24:37+02:00 (load 0.35, GPU 0% / 16 MiB, no n20 procs).

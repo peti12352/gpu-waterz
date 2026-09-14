@@ -367,8 +367,8 @@ __global__ void k_rebuild_sz(const uint32_t* parent, uint32_t* sz, int nnode)
 
 static inline __device__ uint8_t color_of(uint32_t i, uint64_t seed)
 {
-    // Must mix seed through multiply — XOR with id*odd is just (i^seed) parity,
-    // so even–even leftover edges stay same-color forever.
+    // Must mix seed through multiply: XOR with id*odd is just (i^seed) parity,
+    // so even-even leftover edges stay same-color forever.
     uint64_t x = (uint64_t)i * 0x9E3779B97F4A7C15ull;
     x ^= seed * 0xBF58476D1CE4E5B9ull;
     x ^= x >> 30;
@@ -557,7 +557,7 @@ __global__ void k_pack_prop(
 // The loop used to cudaMemset prop over all nnode before every propose: 8 bytes
 // per node, 17.4 MB per inner iteration at val, ~24 GB across a threshold. This
 // pass already reads every entry, so resetting the non-empty ones costs a store
-// on those alone -- the same trade k_hash_emit makes with the hash table.
+// on those alone, the same trade k_hash_emit makes with the hash table.
 // Entries are only ever written by an atomicMax from zero, so an entry that is
 // zero here was never touched and needs no reset.
 __global__ void k_pack_prop_fused(
@@ -852,7 +852,7 @@ __global__ void k_count_dirty_edges(
 //
 // hash_combine_live inserts every live edge into the table every inner
 // iteration. The collision lemma in scripts/g0_agg_ref.py is that a
-// parallel-edge collision can only occur between two dirty edges -- a
+// parallel-edge collision can only occur between two dirty edges, a
 // non-dirty edge has both endpoints unchanged, so its key cannot meet a
 // rewritten one unless that rewritten one is also incident to a dirty
 // endpoint, in which case it is dirty too. Combined with k_scale_sm_bytes
@@ -1142,7 +1142,7 @@ __global__ void k_pack_amask(const uint8_t* amask, const int64_t* ct,
 }
 
 // N21 A2: listed rebuild. keep is a packed-this-inner flag (0/1), not the
-// rewrite keep bit — caller zeros it on old alist ∪ emit holes first.
+// rewrite keep bit: caller zeros it on old alist ∪ emit holes first.
 __global__ void k_keep_zero_listed(const uint32_t* idx, int n, uint8_t* keep)
 {
     int t = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2659,8 +2659,8 @@ static int hash_combine_dirty(
     if (ntab_use > ntab) ntab_use = ntab;
     int tb = (ntab_use + threads - 1) / threads;
     const bool se = slot_emit() && dslots && dnslot && !use_csr;
-    // Warp/SM insert was parent-identical and 1.31× slower (n8_hash).
-    // Full-dirty RBK was 4.2× slower. Large dirty sets stay on G15 CAS.
+    // Warp/SM insert was parent-identical and 1.31x slower (n8_hash).
+    // Full-dirty RBK was 4.2x slower. Large dirty sets stay on G15 CAS.
     {
         NvRange nv("hash_insert");
         if (se) cudaMemset(dnslot, 0, 4);
@@ -3555,8 +3555,8 @@ static int parhac_e6s_dev(
     const int compact_k = ce ? std::atoi(ce) : 0;
     // G-series work-efficiency levers, as a bitmask so each can be A/B'd on
     // its own against this build. Every one of them is bit-identical by
-    // construction rather than by tuning -- see the equivalence argument next
-    // to each -- and scripts/g0_agg_ref.py checks that claim on the real val
+    // construction rather than by tuning, see the equivalence argument next
+    // to each, and scripts/g0_agg_ref.py checks that claim on the real val
     // RAG with a CPU replica of this loop. None has been run on a device yet,
     // so they default off: the locked fingerprint in a1_e6s_voi.json is what
     // this file is for, and a lever that cannot be measured must not be able
@@ -3893,17 +3893,17 @@ static int parhac_e6s_dev(
                         // the reds are already listed, sorted, in dreds.
                         //
                         // Equivalent, not approximately so:
-                        //  - k_freeze acts only on color[i]==1, and k_color
+                        // - k_freeze acts only on color[i]==1, and k_color
                         //    colours only roots, so its domain is the red roots.
-                        //  - reds and blues are disjoint by colour and only
+                        // - reds and blues are disjoint by colour and only
                         //    blues are reparented, so a red stays a root for the
                         //    whole outer and find(i)==i. That makes k_freeze's
                         //    dfind_nocomp and its sz[r]/frozen[i] indexing agree
                         //    with k_freeze_reds' direct use of reds[i].
-                        //  - a red absent from dreds received no proposal, so
+                        // - a red absent from dreds received no proposal, so
                         //    sz[r] still equals sz0[r] and the strict > test
                         //    cannot fire. Skipping it changes nothing.
-                        //  - k_freeze's `sz0[i] ? sz0[i] : 1.0` guard, which
+                        // - k_freeze's `sz0[i] ? sz0[i] : 1.0` guard, which
                         //    k_freeze_reds lacks, is unreachable here: every
                         //    root is its own member so k_rebuild_sz leaves
                         //    sz0[root] >= 1.

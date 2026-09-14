@@ -1,4 +1,4 @@
-# B — measured 24 GB fit table
+# B: measured 24 GB fit table
 
 Date: 2026-09-06. Not a 2 Gvox/s claim. No 2.16 Gvox allocation.
 

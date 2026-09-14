@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N19 C: 3090 Ti grade — refuse unless real 3090 Ti.
+"""N19 C: 3090 Ti grade: refuse unless real 3090 Ti.
 
 Not a 2 Gvox/s claim from 5090.
 """
@@ -58,7 +58,7 @@ def main():
             f"# N19 C 3090 Ti grade\n\n"
             f"- GPU: `{name}`\n"
             f"- REFUSE until real 3090 Ti\n"
-            f"- No C++ default flip without median≥2 Gvox/s AND peak≤24 GB\n"
+            f"- No C++ default flip without median>=2 Gvox/s AND peak≤24 GB\n"
             f"- Never claim 2 Gvox/s from 5090\n"
         )
         return 2
@@ -102,7 +102,7 @@ def main():
     NOTE.write_text(
         f"# N19 C 3090 Ti grade\n\n"
         f"- GPU: `{name}`\n"
-        f"- median e2e={median:.1f} ms → {gvox:.3f} Gvox/s\n"
+        f"- median e2e={median:.1f} ms -> {gvox:.3f} Gvox/s\n"
         f"- peak={peak:.2f} GiB fits24={fits} flip={claim_ok}\n"
     )
     print(json.dumps({"median_ms": median, "gvox_s": gvox, "flip": claim_ok}),

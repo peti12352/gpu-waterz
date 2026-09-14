@@ -200,7 +200,7 @@ def main():
             run216 = json.loads(p.read_text())
 
     keep = bool(a4["identity"] and vs_algo0 and stitch_ok)
-    # Identity True + stitch 0.5–0.8×: keep the kernel behind algo=4,
+    # Identity True + stitch 0.5-0.8x: keep the kernel behind algo=4,
     # do not default it. 2.16 already ran.
 
     out = {

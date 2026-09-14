@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Optional: 8 unique official make_big.mirror flip triples. nfrag + fingerprint.
 
-Explains TASK 26.02 M vs 12×2.175 M. Not a speed path. Idle-5090. Val tiles
-only — no fused 2.16 allocation.
+Explains TASK 26.02 M vs 12x2.175 M. Not a speed path. Idle-5090. Val tiles
+only: no fused 2.16 allocation.
 """
 from __future__ import annotations
 

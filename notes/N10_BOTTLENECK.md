@@ -2,7 +2,7 @@
 
 Not a 2 Gvox/s number. Not a 3090 Ti number. No invented fill-ins.
 
-N8/N9 treated “2.16 is linear, WS > 4 s after W5” as a stop. That is a
+N8/N9 treated "2.16 is linear, WS > 4 s after W5" as a stop. That is a
 measurement of **this stack**, not a theorem that 2 Gvox/s is impossible.
 Abboud ICALP 2024 / ParHAC Thm 1.2 say exact average-linkage is P-complete.
 TASK allows approximate order if VOI holds. BinQueue MEAN already PASSed
@@ -19,15 +19,15 @@ Target: 1080 ms e2e on a **3090 Ti** (1008 GB/s). Idle 5090 (1792 GB/s):
 | RAG | 433 | 424 |
 | agg ε=0.40 | 2224 | 2222 |
 
-Need ~15× on the 5090 to leave room for the slower graded card
-(1080 × 1792/1008 ≈ 603 ms). Linear scaling val→2.16 is 12× voxels / 12×
-fragments / 12× edges. That is make_big 3×2×2, not a law of watershed.
+Need ~15x on the 5090 to leave room for the slower graded card
+(1080 x 1792/1008 ≈ 603 ms). Linear scaling val->2.16 is 12x voxels / 12x
+fragments / 12x edges. That is make_big 3x2x2, not a law of watershed.
 
 ## Where N9 aimed at the wrong owner
 
 N9 Type D timed W5 kernels **2117 ms** and BFS **14 ms** of WS 6536 ms.
 The leftover **~4400 ms** was never split. We then killed E4 / path-halving /
-Playne because “A/B/C cannot close 12×”. Those tracks only attack the 2117 ms
+Playne because "A/B/C cannot close 12x". Those tracks only attack the 2117 ms
 slice. The 4400 ms is plateau **grouping**, not UF and not BFS.
 
 e9b after tile-local UF (one 720 Mvox slab, nC = 244 142 296):
@@ -45,7 +45,7 @@ and the 289+414 ms UF, and parked 244 M integers through the CPU to save
 ~1 GiB of a 32 GiB card.
 
 `segment_d` also D2H/H2D the **6.03 GiB** affinity inside the timed window
-(`WATERZ_AFF_PARK` default on). TASK speed is “affinity already in VRAM”;
+(`WATERZ_AFF_PARK` default on). TASK speed is "affinity already in VRAM";
 that copy is not free and is not required by the listing.
 
 ## Bottlenecks we have not overcome (nuance)
@@ -53,28 +53,28 @@ that copy is not free and is not required by the listing.
 **1. Host park is a fit hack sitting in the speed path.**
 B_FIT parked corners so fused 2.16 pred stayed under 24 GB. We then slabbed
 (Z=125), which already fits. The park stayed. Pageable memcpy + 233 syncs
-per slab × 3 slabs is O(nC) latency, not bandwidth.
+per slab x 3 slabs is O(nC) latency, not bandwidth.
 
 **2. Two full-volume UFs still cost 2117 ms.**
-W5 list is Chen’s face domain (0.58 / 0.40 of a slab). E4 (unique `p1` roots)
+W5 list is Chen's face domain (0.58 / 0.40 of a slab). E4 (unique `p1` roots)
 is still legal and untried. It cannot be the closer alone; it is a real
 contraction of that 2.1 s.
 
 **3. Agglomeration is 22.2 M merges on 2.16, 2222 ms.**
 ParHAC ε=0.40 is the speed path and is already linear in tiles. Exact MEAN
 BinQueue is VOI-legal at T=0.3 and does the same 1.85 M / 22.2 M merge count.
-We never built a GPU FIFO-bin. Serial 22 M pops at 30 ns is 660 ms — inside
+We never built a GPU FIFO-bin. Serial 22 M pops at 30 ns is 660 ms: inside
 the 1080 ms budget if WS and RAG shrink. X1 (union-all-in-band) failed VOI;
 the FIFO-inside-bin is the one that passed.
 
 **4. RAG is 424 ms and was left alone.**
-3-dir contact atomic-hash. 12× val 43 ms. Need ~50 ms on 2.16. Not hash-table
+3-dir contact atomic-hash. 12x val 43 ms. Need ~50 ms on 2.16. Not hash-table
 PDFs (dirty multiplicity 1.07). A streaming sort+reduce of faces may be.
 
 **5. Memory forces z-slabs, not 12 serial tiles.**
 Fused WS pred 21 GiB + aff 6 + labels 8.6 does not fit 24 GB. Three Z=125
-slabs do. 8-tile *serial* was 8.3× and is dead. Parallel tiles on one GPU
-need one tile’s scratch — that is the slab we already run. The win is making
+slabs do. 8-tile *serial* was 8.3x and is dead. Parallel tiles on one GPU
+need one tile's scratch: that is the slab we already run. The win is making
 one 720 Mvox slab cheap, not cutting it into val crops.
 
 **6. Accuracy locks S1-equivalent fragments.**
@@ -93,10 +93,10 @@ Mutex / frozen-CC / hist-q / X1 failed VOI. Plateau BFS cannot be dropped
 4. **E4 unique-root stitch** on the remaining UF 2.1 s. Val identity first.
 5. **GPU MEAN BinQueue** (stock FIFO, N=256). CPU PASS is the licence.
    Kill if visits do not become wall (N7).
-6. **RAG sort+reduce** only after 1–5; 424 ms is not the first 15×.
+6. **RAG sort+reduce** only after 1-5; 424 ms is not the first 15x.
 
-Honest composition on the 5090 if 1–5 all pay: WS ~1 s, RAG ~0.1 s,
-agg ~0.5 s → ~1.6 s / 1.3 Gvox/s. Still short of 2.0 on a slower card.
+Honest composition on the 5090 if 1-5 all pay: WS ~1 s, RAG ~0.1 s,
+agg ~0.5 s -> ~1.6 s / 1.3 Gvox/s. Still short of 2.0 on a slower card.
 That is a remaining factor, not a proof of impossibility. The next proof
 is the phase split, not another paper.
 
@@ -114,8 +114,8 @@ is the phase split, not another paper.
 | exclusive scan | 0.53 | 0.53 |
 | BFS | 1.18 | 1.19 |
 
-**1.74×** on val WS. The sort that we built DoubleBuffer for is 3 ms. The
-park path is 268 ms of pageable copies. 12× that tax is the 2.16 leftover.
+**1.74x** on val WS. The sort that we built DoubleBuffer for is 3 ms. The
+park path is 268 ms of pageable copies. 12x that tax is the 2.16 leftover.
 
 Default `WATERZ_UF_ALGO` stays 0 until a track passes identity and its
 speed gate. `WATERZ_HOST_PARK=0` is identity-true on val; 2.16 retime

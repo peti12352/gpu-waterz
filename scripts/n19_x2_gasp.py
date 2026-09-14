@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N19 X2: GASP Average on cached RAG — VOI kill expected.
+"""N19 X2: GASP Average on cached RAG: VOI kill expected.
 
 Not a 2 Gvox/s claim. Not 3090 Ti.
 """

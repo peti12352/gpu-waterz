@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """N18 B1: work-efficient parallel BinQueue probe with 30s host abort.
 
-Multi-bin parallel pop (not single-thread drain). Kill if wall >2× ParHAC val
+Multi-bin parallel pop (not single-thread drain). Kill if wall >2x ParHAC val
 (~400 ms) or hang. Not a 2 Gvox/s claim. Not 3090 Ti.
 """
 from __future__ import annotations

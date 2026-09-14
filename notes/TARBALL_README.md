@@ -1,4 +1,4 @@
-# GPU watershed + agglomeration bounty — dataset & baseline
+# GPU watershed + agglomeration bounty: dataset & baseline
 
 Everything here is hdf5, so no zarr/tensorstore needed.
 
@@ -27,8 +27,8 @@ viz/                                                                renders of a
 
 Defaults, unchanged: scoring `OneMinus<MeanAffinity<RegionGraphType, ScoreValue>>`,
 `aff_threshold_low = 0.0001`, `aff_threshold_high = 0.9999`, `discretize_queue = 0`
-(= an exact `std::priority_queue` min-heap, **not** the bucketed queue — merge order is exact).
-`waterz.agglomerate()` does **both** stages — watershed fragments *and* the
+(= an exact `std::priority_queue` min-heap, **not** the bucketed queue: merge order is exact).
+`waterz.agglomerate()` does **both** stages: watershed fragments *and* the
 mean-affinity agglomeration on top. The bounty target is that whole thing.
 
 **Threshold convention.** waterz thresholds are *scores*, `score = 1 - mean_affinity`.
@@ -48,17 +48,17 @@ all of them.
 | 0.2 | 0.8 | 0.3779 | 0.3325 | 0.7104 | 294 587 |
 | 0.1 | 0.9 | 0.3081 | 0.6894 | 0.9975 | 241 027 |
 
-Best total VOI = **0.6949 at affinity threshold 0.3** — matches the accuracy the CAD paper
+Best total VOI = **0.6949 at affinity threshold 0.3**: matches the accuracy the CAD paper
 reports for this checkpoint. The watershed alone produces **2 175 400 fragments** and a region
 graph with **7 505 458 edges** on this volume.
 
-Metric: `waterz.evaluate(labels.astype(np.uint64), gt.astype(np.uint64))` →
+Metric: `waterz.evaluate(labels.astype(np.uint64), gt.astype(np.uint64))` ->
 `voi_split = H(seg|gt)` (over-segmentation) and `voi_merge = H(gt|seg)` (under-segmentation),
 in **bits** (log2), lower is better. Voxels with `gt == 0` are excluded from the metric
 (only 125 voxels here, immaterial); a *predicted* label 0 is treated as an ordinary label,
 not as "unassigned".
 
-### Run-to-run jitter — the reference is NOT deterministic
+### Run-to-run jitter: the reference is NOT deterministic
 
 Stock waterz does not reproduce itself bit-for-bit. Two identical `agglomerate()` calls in
 one process return different label volumes: raw watershed fragment counts vary by ~20 in
@@ -69,8 +69,8 @@ voi_split  spread 1.7e-05      voi_merge  spread 1.5e-05      #segments  322545 
 ```
 
 At the ungraded aff_thr 0.9 (essentially the raw watershed) the spread is larger, ~5e-04.
-Either way it is 3 orders of magnitude below the 0.02 gate, so it does not affect grading —
-but if `run_baseline.py` gives you numbers that differ from `voi.csv` in the 4th or 5th
+Either way it is 3 orders of magnitude below the 0.02 gate, so it does not affect grading.
+If `run_baseline.py` gives you numbers that differ from `voi.csv` in the 4th or 5th
 decimal, that is expected, not a broken install.
 
 Your implementation is still required to be deterministic (same input -> byte-identical
@@ -79,22 +79,22 @@ labels). You control your own tie-breaking; waterz's is an artefact, not a spec.
 ### Reference CPU cost
 
 Stock waterz on this 180 Mvox volume, single threshold, whole pipeline: **26.9 s = 6.7 Mvox/s**
-— watershed 3.8 s (direction bits 0.34 s, plateau BFS 2.1 s, basin labelling 1.0 s), region
+: watershed 3.8 s (direction bits 0.34 s, plateau BFS 2.1 s, basin labelling 1.0 s), region
 graph ~14 s, merge loop 0.5-4 s depending on threshold, relabel ~1 s. Note this build is
 effectively **single-threaded**: it links `-fopenmp` but contains no `#pragma omp` at all.
 
 On the 2.16 Gvox benchmark volume, watershed + region graph alone take **145 s**
 (watershed 45 s), producing **26 023 852 fragments and 90 323 139 region-graph edges**
-— measured, not extrapolated. Peak host RAM for that run was ~60 GB.
+: measured, not extrapolated. Peak host RAM for that run was ~60 GB.
 
 ## Exact semantics (verified against the waterz source, not the paper)
 
-Read this before implementing — several details are easy to get wrong.
+Read this before implementing: several details are easy to get wrong.
 
 **Affinity indexing.** `aff[c][z,y,x]` is the affinity of the edge between voxel `(z,y,x)`
 and its neighbour **one step back** along axis `c`; channel 0 pairs with z, 1 with y, 2
 with x (`basic_watershed.hpp:58-63`). So each voxel sees **6** neighbour affinities: its
-own three channels (−z, −y, −x) plus the three channels of its forward neighbours
+own three channels (-z, -y, -x) plus the three channels of its forward neighbours
 (`aff[0][z+1][y][x]` for +z, etc.). Only 3 channels are stored; the neighbourhood is 6.
 
 **Volume boundary.** Out-of-range affinities are substituted with `low`, not 0
@@ -108,7 +108,7 @@ maximum. If `m <= low` no bits are set and the voxel ends up label 0 (background
 **Plateaus.** Voxels that mutually point at each other form plateaus. waterz seeds a BFS
 from "plateau corners" (a voxel that points at a neighbour which does not point back),
 walks inward, and rewrites each plateau voxel's bits to the single direction that leads off
-the plateau. Getting this wrong is the usual source of VOI drift — arbitrary tie-breaking
+the plateau. Getting this wrong is the usual source of VOI drift: arbitrary tie-breaking
 changes fragment boundaries.
 
 **Basins.** A serial scan follows flow chains; a chain that reaches an already-labelled
@@ -116,7 +116,7 @@ voxel inherits its ID, otherwise it becomes a new fragment. Fragment IDs start a
 0 is background.
 
 **Region graph.** Built by scanning only the **three negative** directions per voxel
-(`region_graph.hpp:53-67`) — that covers every adjacent pair once. Edge weight = mean of
+(`region_graph.hpp:53-67`): that covers every adjacent pair once. Edge weight = mean of
 the affinities on the contact faces, accumulated as a running mean in fp32. Edges whose
 smaller endpoint is 0 (i.e. fragment-to-background) are accumulated but then **dropped**:
 the graph-building loop starts at `id1 = 1`. Background does not participate in
@@ -149,7 +149,7 @@ voi_split(yours) <= voi_split(baseline) + 0.02
 voi_merge(yours) <= voi_merge(baseline) + 0.02
 ```
 
-Both must hold. Trading split for merge is not a pass — the pair is graded, not the total.
+Both must hold. Trading split for merge is not a pass: the pair is graded, not the total.
 No post-processing beyond a min-size filter.
 
 Self-check:
@@ -162,15 +162,15 @@ python baseline/run_baseline.py --candidate mine_thr0.2.h5 mine_thr0.3.h5 \
 
 ## Speed gate
 
-**≥ 2 Gvox/s, end-to-end, on a single NVIDIA RTX 3090 Ti** (24 GB, ~1008 GB/s).
+**>= 2 Gvox/s, end-to-end, on a single NVIDIA RTX 3090 Ti** (24 GB, ~1008 GB/s).
 
 * **The benchmark volume is exactly `[3, 375, 2400, 2400]` = 2.16 Gvox**, produced by
   `python make_big.py` with its default settings (see below). Not a crop of it, not a
-  different tiling — that volume. At the target rate one run takes ~1.1 s, long enough
+  different tiling: that volume. At the target rate one run takes ~1.1 s, long enough
   that launch overhead and clock ramp don't distort the number.
-* End-to-end = affinity already in VRAM → final uint32 labels in VRAM, for one
+* End-to-end = affinity already in VRAM -> final uint32 labels in VRAM, for one
   threshold (use 0.3). Host↔device transfer and disk I/O are excluded; everything
-  else — watershed, region graph, agglomeration, relabel — is included.
+  else: watershed, region graph, agglomeration, relabel: is included.
 * Report **median, min and max of 5 timed runs** after one warm-up run, timed with
   CUDA events, plus a per-stage breakdown (watershed / region graph / agglomeration /
   relabel). Median is what's graded.
@@ -179,14 +179,14 @@ python baseline/run_baseline.py --candidate mine_thr0.2.h5 mine_thr0.3.h5 \
 * It fits: 2.16 Gvox is 6.5 GB of uint8 affinity plus 8.6 GB of uint32 labels = 15.1 GB,
   leaving ~9 GB of the 3090 Ti's 24 GB for fragment and region-graph structures. That volume carries
   **26.0 M fragments and 90.3 M region-graph edges** (measured with stock waterz). If your
-  design needs more, chunk internally and say so — but the timing still covers the whole
+  design needs more, chunk internally and say so: but the timing still covers the whole
   volume.
 * Develop on any GPU; the reported number must come from a 3090 Ti. State the exact card
   and driver version.
 
 ## Building the speed volume
 
-`cremiA_val/affinity.h5` is only 180 Mvox — too small to time reliably. `make_big.py`
+`cremiA_val/affinity.h5` is only 180 Mvox: too small to time reliably. `make_big.py`
 mirror-tiles it. Default settings produce the graded benchmark volume:
 
 ```
@@ -196,23 +196,23 @@ python make_big.py --factors 4 3 3 --out big/affinity_6gvox.h5      # 6.5 Gvox, 
 python make_big.py --verify      # prove the mirroring is edge-correct
 ```
 
-Affinity is an **edge** quantity — `affinity[c][z,y,x]` is the affinity between voxel
-(z,y,x) and its neighbour one step back along axis c — so a plain `np.flip` produces a
+Affinity is an **edge** quantity: `affinity[c][z,y,x]` is the affinity between voxel
+(z,y,x) and its neighbour one step back along axis c: so a plain `np.flip` produces a
 volume whose edges are off by one. `make_big.py` flips every channel along the mirrored
 axis *and* shifts that axis's own channel by one voxel, zeroing the seam plane. The
 `--verify` mode proves this: mirrored crops yield **exactly** the same watershed fragment
 count as the original (54936 vs 54936 on each of z, y, x), whereas naive `np.flip` is off
-by 8–83 %.
+by 8-83 %.
 
 Because tiles mirror rather than repeat, texture stays continuous across junctions and
-fragment count / region-graph size scale roughly linearly with volume — a fair
+fragment count / region-graph size scale roughly linearly with volume: a fair
 throughput benchmark, not a degenerate one. No ground truth for this volume: it grades
 speed only.
 
 ## Visualizations
 
 `viz/` (from `make_viz.py`):
-* `slice_z*.png` — full slice: raw EM | affinity RGB (R=x, G=y, B=z) | GT | baseline at every threshold
-* `zoom_z*.png` — 500×500 crop, segmentation alpha-blended over EM
-* `affinity_channels_z062.png` — the three channels separately; z is the weak, anisotropic one
-* `section_xz_y600.png` — xz cross-section (z upsampled 6×) showing the 4×4×40 nm anisotropy
+* `slice_z*.png`: full slice: raw EM | affinity RGB (R=x, G=y, B=z) | GT | baseline at every threshold
+* `zoom_z*.png`: 500x500 crop, segmentation alpha-blended over EM
+* `affinity_channels_z062.png`: the three channels separately; z is the weak, anisotropic one
+* `section_xz_y600.png`: xz cross-section (z upsampled 6x) showing the 4x4x40 nm anisotropy

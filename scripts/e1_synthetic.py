@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""E1a–f. Assert S1–S4 on tiny volumes. No GPU."""
+"""E1a-f. Assert S1-S4 on tiny volumes. No GPU."""
 from __future__ import annotations
 
 import sys
@@ -22,10 +22,10 @@ def e1a():
 
 
 def e1b():
-    # two pairs along x, weak contact in the middle → 2 fragments, 1 RAG edge
+    # two pairs along x, weak contact in the middle -> 2 fragments, 1 RAG edge
     aff = np.zeros((3, 1, 1, 4), np.float32)
-    aff[2, 0, 0, 1] = 0.9  # voxel1 -- voxel0
-    aff[2, 0, 0, 3] = 0.9  # voxel3 -- voxel2
+    aff[2, 0, 0, 1] = 0.9  # voxel1-voxel0
+    aff[2, 0, 0, 3] = 0.9  # voxel3-voxel2
     aff[2, 0, 0, 2] = 0.25  # contact between the two pairs
     fr = watershed(aff, LOW, HIGH)
     n = len(set(fr.ravel()) - {0})
@@ -71,14 +71,14 @@ def e1e():
     from ref_cpu import _heap_agglomerate, extract
 
     # fragments 1-2-3: edges (1,2) mean 0.9 n=1; (1,3) 0.4 n=2; (2,3) 0.8 n=3
-    # merge 1-2 first (mean 0.9); (1,3) and (2,3) combine → mean 3.2/5 = 0.64
+    # merge 1-2 first (mean 0.9); (1,3) and (2,3) combine -> mean 3.2/5 = 0.64
     edges = {
         (1, 2): [0.9, 1, 0.9],
         (1, 3): [0.8, 2, 0.4],
         (2, 3): [2.4, 3, 0.8],
     }
     snaps = _heap_agglomerate(edges, [0.85, 0.50])
-    # aff 0.85: merge while mean>0.85 → only 1-2. 1 and 2 same root; 3 separate.
+    # aff 0.85: merge while mean>0.85 -> only 1-2. 1 and 2 same root; 3 separate.
     uf = snaps[0.85]
     assert uf.find(1) == uf.find(2)
     assert uf.find(3) != uf.find(1)

@@ -5,7 +5,7 @@ csrc/rag.cu accumulates contact sums with `atomicAdd(&tab[s].sum, a)` on a
 float32. Float addition is not associative, so if two runs interleave their
 atomics differently the resulting sums differ in the low bits. That would make
 the edge weights, and therefore every downstream merge decision, vary run to
-run -- a direct violation of TASK.md's "same input -> byte-identical labels".
+run, a direct violation of TASK.md's "same input -> byte-identical labels".
 
 This probe calls rag_gpu (the host-pointer entry point, which allocates and
 frees its own device memory, so no torch is needed) twice on the same input and

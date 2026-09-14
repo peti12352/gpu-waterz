@@ -109,8 +109,8 @@ def main():
     peak_ws = ws_p + seg_b + bits_b
     scale_v = NVOX_216 / nvox
     pred_ws = peak_ws * scale_v / GIB
-    # Official 2.16 is 3 z-tiles of 125×2400×2400. Scratch scales with one
-    # tile (4× val YX), not 12× the fused volume.
+    # Official 2.16 is 3 z-tiles of 125x2400x2400. Scratch scales with one
+    # tile (4x val YX), not 12x the fused volume.
     slab_nvox = 125 * 2400 * 2400
     pred_ws_slab = (ws_p / nvox) * slab_nvox / GIB + (seg_b + bits_b) * scale_v / GIB
     pred_rag = (

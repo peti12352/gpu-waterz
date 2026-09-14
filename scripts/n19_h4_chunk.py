@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N19 H4: Lu–Zlateski chunked MEAN correctness probe on val RAG.
+"""N19 H4: Lu-Zlateski chunked MEAN correctness probe on val RAG.
 
 Split nodes into 2 chunks by id; delay boundary edges; compare parents to ParHAC.
 Stamp if mismatch. No speed claim. Not a 2 Gvox/s claim. Not 3090 Ti.
@@ -130,7 +130,7 @@ def main():
     nch = len(set(pchunk.tolist()))
     kill = not eq
     reason = (
-        "parents mismatch vs ParHAC (simplified freeze ≠ paper; stamp)"
+        "parents mismatch vs ParHAC (simplified freeze != paper; stamp)"
         if kill else "parents match ParHAC"
     )
     doc = {

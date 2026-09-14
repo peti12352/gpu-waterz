@@ -19,7 +19,7 @@ accuracy risk belongs behind the VOI gate in the V series instead.
 The CUDA-event phase split comes along for free from the same p0aa entry, so
 the measured speedup is reported next to the equality result rather than
 needing a second run. Note that phase timings on a shared card are dominated by
-launch count rather than work -- see the header of m1_cost_model.py -- so treat
+launch count rather than work, see the header of m1_cost_model.py, so treat
 them as an upper bound unless the card is idle.
 """
 from __future__ import annotations

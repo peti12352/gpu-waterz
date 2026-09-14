@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """N19 single-exp fast kill wrapper.
 
-dead-check → free_gpu → gate → notes/LOG/dead. Claim string mandatory.
+dead-check -> free_gpu -> gate -> notes/LOG/dead. Claim string mandatory.
 Not a 2 Gvox/s claim. Not 3090 Ti.
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ def main():
                     choices=("voi_only", "val_ws", "ident"))
     ap.add_argument("--extra-json", default="{}")
     ap.add_argument("--owner-substr", default="",
-                    help="If set, refuse micro-opt unless owner ≥200 ms")
+                    help="If set, refuse micro-opt unless owner >=200 ms")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--no-216", action="store_true")
     ap.add_argument("--kill-reason", default="")

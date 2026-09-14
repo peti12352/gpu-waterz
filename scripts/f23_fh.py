@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F23: Felzenszwalb–Huttenlocher MInt + hard cut w<=1-T."""
+"""F23: Felzenszwalb-Huttenlocher MInt + hard cut w<=1-T."""
 from __future__ import annotations
 
 import argparse

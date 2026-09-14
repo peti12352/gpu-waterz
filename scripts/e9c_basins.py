@@ -68,12 +68,12 @@ def main():
     print(f"E9c nfrag={nfrag} task={FRAGMENTS_VAL} d={dn} bg={bg} "
           f"bg_task={BG_VAL_MEASURED} wall={wall:.3f}")
     if dn > JITTER:
-        print("E9c FAIL nfrag — do not re-run E1")
+        print("E9c FAIL nfrag: do not re-run E1")
         raise SystemExit(1)
     if bg != BG_VAL_MEASURED:
         print("E9c FAIL bg")
         raise SystemExit(1)
-    print("E9c nfrag/bg PASS — G4r with locked RAG+AGG")
+    print("E9c nfrag/bg PASS: G4r with locked RAG+AGG")
     sys.path.insert(0, str(ROOT / "src"))
     from segment import _parhac, _rag
     u, v, sm, ct = _rag(aff, seg)

@@ -1,11 +1,11 @@
-# N23 finish -- A5 2.16 + contact-mean CSR rewrite
+# N23 finish: A5 2.16 + contact-mean CSR rewrite
 
 Campaign closed on greengoblin (idle RTX 5090). Not a 2 Gvox/s number.
 Product default still E6s. Dual-eps 0.08 four-T / 0.40 T=0.3.
 Flags stay default off: `WATERZ_SLOT_EMIT`, `WATERZ_LISTED_INSERT`,
 `WATERZ_LISTED_REBUILD`, `WATERZ_CSR_REWRITE`. Do not call `e6t_rebuild`.
 
-## N23_A0 -- the A5 2.16 hole
+## N23_A0: the A5 2.16 hole
 
 N22_A5 had identity+four PASS and a 62 ms val cut, then skipped 2.16
 under the N18 B3 100 ms val gate (`COMPACT_EVERY=8` looked fine on val
@@ -29,7 +29,7 @@ nlab_216=3860788. `keep_default=false`. Stamp `216_cut`.
 Both 2.16 aggs are >=50 ms under 1679.9. That is a closer on the
 optional A5 env, not a product-default move.
 
-## N23_D0 -- CPU splice equals scan
+## N23_D0: CPU splice equals scan
 
 Full `data/cache/rag.npz`. `g0_agg_ref --mode both --csr --lemma`.
 
@@ -46,11 +46,11 @@ base/fast (~7.8x at 0.08, ~6.8x at 0.40). Pointer-chase visits
 (`csr_lookup`) stay 3x the unique dirty edges because dead slots stay
 on the lists.
 
-## N23_A1 -- GPU CSR is identity-true and slower
+## N23_A1: GPU CSR is identity-true and slower
 
 `WATERZ_CSR_REWRITE=1`, A5 flags off, `FUSE_DIRTY` required. Layer-entry
 `head`/`nxt` prepend-build, listed fuse, in-place hash commit (CAS-win
-slot, not prefix-emit into `holes[0:m]` -- that permute broke splice),
+slot, not prefix-emit into `holes[0:m]`; that permute broke splice),
 then splice.
 
 Prefix-emit into foreign slots failed identity (inners 563-570).

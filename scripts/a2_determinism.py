@@ -131,7 +131,7 @@ def main():
     CACHE.mkdir(parents=True, exist_ok=True)
     (CACHE / "a2_determinism.json").write_text(json.dumps(out, indent=2) + "\n")
     print(
-        f"A2 {'PASS' if all_ok else 'FAIL'} — TASK requires byte-identical "
+        f"A2 {'PASS' if all_ok else 'FAIL'}: TASK requires byte-identical "
         "labels run to run",
         flush=True,
     )

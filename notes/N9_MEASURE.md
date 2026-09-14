@@ -31,7 +31,7 @@ GPU: `NVIDIA GeForce RTX 5090, 526 MiB, 31584 MiB, 0 %`
 
 - e2e_ms=9212.7 gvox_s_5090=0.234 (not TASK-grade; wrong card)
 - STAGE_MS ws=6536.229460965842 rag=424.4484193623066 agg=2222.334673628211
-- nlab=3860788 (T=0.3 labels). WS nfrag=26104800 from `E9 z-slab n=3` (12× val 2175400)
+- nlab=3860788 (T=0.3 labels). WS nfrag=26104800 from `E9 z-slab n=3` (12x val 2175400)
 - w5_ms=2116.74 bfs_ms=14.08 nlist_max=418817490 nlist_last=285029332 / 720000000
 - WS > 4000 ms: True STOP CUDA tracks A/B/C
 

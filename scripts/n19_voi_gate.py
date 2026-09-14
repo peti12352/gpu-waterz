@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """N19 VOI-first gate. Modes: voi_only (default), val_ws, ident.
 
-Order: card_busy → build → (val_ws | VOI 2-run → four-T → optional 2.16).
+Order: card_busy -> build -> (val_ws | VOI 2-run -> four-T -> optional 2.16).
 Identity diagnostic only in voi_only. Unlink n8_216.json before 2.16.
 WATERZ_ABORT_SEC (60 val_ws / 120 val / 600 2.16).
 

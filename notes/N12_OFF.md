@@ -10,9 +10,9 @@ Not a 2 Gvox/s claim. Not 3090 Ti. Always grade, never default on FAIL.
 | ε=2.0 | 130 ms | 0.4490 / **0.8735** | FAIL |
 | Kruskal frozen SDSL | 6092 ms vs ParHAC val 202 | split 2.94, 0 merges | FAIL |
 | mutex hop (m16b) | 273 s (script); M16b wall 146 s | split 2.13 | FAIL (expected) |
-| PRUF3D sm_120 | GPU **101.9 ms** (wall 3.75 s IO) vs WS val 224–344 ms | grayscale Meyer, not waterz fragments | n/a |
-| RAMA | cmake: tree not on goblin | — | not built |
-| cuSLINK | not executed; Kruskal is the frozen-MST analog | — | FAIL analog |
-| hist-q GPU FIFO | skipped | N11 BinQueue dead | — |
+| PRUF3D sm_120 | GPU **101.9 ms** (wall 3.75 s IO) vs WS val 224-344 ms | grayscale Meyer, not waterz fragments | n/a |
+| RAMA | cmake: tree not on goblin |: | not built |
+| cuSLINK | not executed; Kruskal is the frozen-MST analog |: | FAIL analog |
+| hist-q GPU FIFO | skipped | N11 BinQueue dead |: |
 
 No off-contract probe is a `segment_d` default.

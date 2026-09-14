@@ -46,6 +46,6 @@ ws_peak=13.22 GiB (`ws_mem_peak`). 3090 Ti 24 GB **not measured**. SHARE_OFF is 
 
 ## keep_default
 
-False. Need four-T + 2.16 det + WS≤2149 **and** agg≤1861.7. WS 1312 passes 1.2× vs N13 (cut 1.966); agg 1929 cut 1.158 misses by 67 ms.
+False. Need four-T + 2.16 det + WS≤2149 **and** agg≤1861.7. WS 1312 passes 1.2x vs N13 (cut 1.966); agg 1929 cut 1.158 misses by 67 ms.
 
 `data/cache/n16_deep.json`

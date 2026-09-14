@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""G14: G4r → G5r → G6r after current WS/AGG locks."""
+"""G14: G4r -> G5r -> G6r after current WS/AGG locks."""
 from __future__ import annotations
 
 import subprocess
@@ -54,7 +54,7 @@ def main():
         f"extract={text:.3f} total={tot:.3f} "
         f"{'PASS' if tot < 0.050 else 'FAIL'} (need <0.050s)"
     )
-    print("G14 G9 BLOCKED — no 3090 Ti")
+    print("G14 G9 BLOCKED: no 3090 Ti")
 
 
 if __name__ == "__main__":

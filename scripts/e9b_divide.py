@@ -53,7 +53,7 @@ def main():
     mism = int((host != gpu).sum())
     print(f"E9b rc={rc} mismatch={mism} array_equal={bool(np.array_equal(host, gpu))}")
     if rc != 1 or mism != 0:
-        print("E9b FAIL bit mismatch — do not almost")
+        print("E9b FAIL bit mismatch: do not almost")
         raise SystemExit(1)
     print("E9b PASS bit-equal")
 

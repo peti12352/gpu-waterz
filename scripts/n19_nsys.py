@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N19 nsys with --force-export=true → n19_owners.json.
+"""N19 nsys with --force-export=true -> n19_owners.json.
 
 Kill proposed micro-opts whose max kernel <200 ms of e2e.
 Not a substitute for a GPU timed gate. Not a 2 Gvox/s claim. Not 3090 Ti.
@@ -57,7 +57,7 @@ def nsys_dump(rep: Path) -> str:
 
 
 def parse_kernel_ms(blob: str, n=40):
-    """Parse nsys cuda_gpu_kern_sum rows → [{name, total_ms, pct}, ...]."""
+    """Parse nsys cuda_gpu_kern_sum rows -> [{name, total_ms, pct}, ...]."""
     rows = []
     for ln in blob.splitlines():
         if "Time (%)" in ln or not ln.strip() or ln.strip().startswith("-"):
@@ -75,7 +75,7 @@ def parse_kernel_ms(blob: str, n=40):
         if not any(x in name for x in ("k_", "cub::", "Device", "parhac", "hash")):
             if "k_" not in ln and "cub::" not in ln:
                 continue
-            # name may have spaces — take last token with k_ or cub
+            # name may have spaces: take last token with k_ or cub
             for p in reversed(parts):
                 if "k_" in p or "cub::" in p or "Device" in p:
                     name = p
@@ -127,7 +127,7 @@ def parse_nvtx_ms(blob: str):
 
 
 def owner_gate(owners: dict, kernel_substr: str) -> dict:
-    """Return whether a micro-opt targeting kernel_substr clears ≥200 ms."""
+    """Return whether a micro-opt targeting kernel_substr clears >=200 ms."""
     e2e = float(owners.get("e2e_ms") or 0)
     hits = [
         k for k in (owners.get("kernels") or [])

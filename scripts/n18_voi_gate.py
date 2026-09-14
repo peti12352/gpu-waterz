@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """N18 VOI-first gate. Modes: voi_only (default) vs ident (legacy).
 
-Order: card_busy → build → T=0.3 VOI 2-run → four-T ε=0.08 → optional 2.16
-→ identity diagnostic JSON only (not skip/kill for 2.16 in voi_only).
+Order: card_busy -> build -> T=0.3 VOI 2-run -> four-T ε=0.08 -> optional 2.16
+-> identity diagnostic JSON only (not skip/kill for 2.16 in voi_only).
 
 Ops: parks off, subprocess per env, no --delete on data rsync.
 Claim: not a 2 Gvox/s number; not 3090 Ti.
@@ -121,7 +121,7 @@ def run_gate(
                 not h and ident.get("identity") and ident.get("run2_array_equal")
             )
         else:
-            # diagnostic only — do not block VOI path
+            # diagnostic only: do not block VOI path
             ident_ok = not h
 
     voi, voi_ok = {}, False

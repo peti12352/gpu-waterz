@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P0x → E6r or Track B (P0v/L36/R36/P0w) → G16."""
+"""P0x -> E6r or Track B (P0v/L36/R36/P0w) -> G16."""
 from __future__ import annotations
 
 import json

@@ -1,11 +1,11 @@
-# Tarball README vs SOURCES S1–S5
+# Tarball README vs SOURCES S1-S5
 
-Compared `data/ws_bounty/README.md` (“Exact semantics, verified against the waterz source”)
-to SOURCES.md S1–S5 / funkey/waterz a0184d2.
+Compared `data/ws_bounty/README.md` ("Exact semantics, verified against the waterz source")
+to SOURCES.md S1-S5 / funkey/waterz a0184d2.
 
 **No semantic disagreement.** TASK.md listing still owns gates.
 
-| Topic | Tarball README | S1–S5 | Delta |
+| Topic | Tarball README | S1-S5 | Delta |
 |---|---|---|---|
 | 6-neigh, OOB=`low`, `m>low` flow | same | S1 | none |
 | bits `aff==m \|\| aff>=high` | same | S1 | none |

@@ -73,7 +73,7 @@ for p in list(CACHE.glob("N19_H*.json")):
 if not agg_ok:
     (NOTE / "N19_H_STOP.md").write_text(
         f"# N19 H-stop\n\n{CLAIM}.\n\nMEAN-exact local maximum; no agg≤1000 with four-T.\n"
-        f"Remaining: WS~1315 agg~1683 e2e~3104; need ~2.9× to 1080 ms.\n"
+        f"Remaining: WS~1315 agg~1683 e2e~3104; need ~2.9x to 1080 ms.\n"
     )
 (NOTE / "N19_SUMMARY.md").write_text(
     f"# N19 summary\n\n{CLAIM}.\n\nSee N19_W_STOP / N19_H_STOP / LOG.\n"

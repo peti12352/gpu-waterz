@@ -15,7 +15,7 @@ def main():
     STAMP.parent.mkdir(parents=True, exist_ok=True)
     bazel = shutil.which("bazel")
     if bazel is None:
-        print("P0k SKIP no bazel — official SubgraphHAC did not return")
+        print("P0k SKIP no bazel: official SubgraphHAC did not return")
         STAMP.write_text("0\n")
         return
     if not (GM / "in_memory/clustering/hac/subgraph/approximate_subgraph_hac.h").is_file():
@@ -23,7 +23,7 @@ def main():
         STAMP.write_text("0\n")
         return
     print("P0k bazel present; 30s timeout on a compile+run is not wired (no standalone target)")
-    print("P0k SKIP — T22 not a VOI path; official target is not a one-file binary")
+    print("P0k SKIP: T22 not a VOI path; official target is not a one-file binary")
     STAMP.write_text("0\n")
 
 

@@ -1,4 +1,4 @@
-# N9 Track C — Playne-on-flow-bits killed
+# N9 Track C: Playne-on-flow-bits killed
 
 Not a 2 Gvox/s number. Not implemented. IEEE TPDS PDF still not in hand; spec would have been the published 3D clamp kernels rewritten over flow bits.
 

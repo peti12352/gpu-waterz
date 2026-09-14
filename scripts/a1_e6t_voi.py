@@ -2,7 +2,7 @@
 """A1: grade E6t/StarMerge on its own at the four TASK thresholds.
 
 Track A tunes the StarMerge path, so its correctness has to be established
-first -- tuning a wrong implementation is worthless. This gate answers only
+first, tuning a wrong implementation is worthless. This gate answers only
 "is E6t VOI-legal", never "is E6t fast", and it writes no `*_pass.txt` stamp,
 so `segment()` path selection is untouched.
 
@@ -201,7 +201,7 @@ def main():
     if rc != 1:
         print(f"A1 FAIL rc={rc}", flush=True)
     elif not path_ok:
-        print(f"A1 FAIL — wanted {tag} but the other path ran.", flush=True)
+        print(f"A1 FAIL: wanted {tag} but the other path ran.", flush=True)
     elif nograde:
         print("A1 --nograde: stats only, VOI not evaluated", flush=True)
     else:

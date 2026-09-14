@@ -99,10 +99,10 @@ def main():
             return True
         if miss_both_halves(text):
             stamp("b34", False, "FAIL naive both-halves>0.05 skip Lu")
-            print("B34 naive miss >0.05 both halves — skip Lu-exact", flush=True)
+            print("B34 naive miss >0.05 both halves: skip Lu-exact", flush=True)
             return False
         if close_enough(text):
-            print("B34 naive close — running Lu-exact", flush=True)
+            print("B34 naive close: running Lu-exact", flush=True)
             args.lu = True
         else:
             stamp("b34", False, f"FAIL naive residual={nres}")

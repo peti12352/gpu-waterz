@@ -1,4 +1,4 @@
-# B — DoubleBuffer + one-sort gather + park
+# B: DoubleBuffer + one-sort gather + park
 
 Date: 2026-09-06. Not a 2 Gvox/s claim. No 2.16 allocation.
 Idle 5090, parked val. `data/cache/b_dbl_buf.json`.
@@ -11,7 +11,7 @@ nfrag 2175400, `wz_fragments.npy` array_equal=True, leaked=0.
 | DoubleBuffer + gather + park | **0.916 GiB** | **21.05** |
 
 `fits: true` vs 23 usable. Binding stage is still WS, but under the cap.
-Sort peak is 4 × nC + DoubleBuffer tmp (0.007 GiB). `tmp_inout` still
+Sort peak is 4 x nC + DoubleBuffer tmp (0.007 GiB). `tmp_inout` still
 0.461 GiB if queried; we no longer allocate it.
 
 What landed (identity-gated on val):

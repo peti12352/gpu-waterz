@@ -97,7 +97,7 @@ def main():
     ok = "ACCURACY GATE: PASS" in r.stdout
     print(f"E13 UPGMA {'PASS' if ok else 'FAIL'} wall={wall:.3f}")
     if not ok:
-        print("E13 killed — do not invent a contact-mean cut of the UPGMA dendrogram")
+        print("E13 killed: do not invent a contact-mean cut of the UPGMA dendrogram")
         raise SystemExit(1)
 
 

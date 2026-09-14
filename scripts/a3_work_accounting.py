@@ -132,7 +132,7 @@ def main():
         f"A3 nact: max={int(nact.max())} p50={int(np.median(nact))} "
         f"min={int(nact.min())} last={int(nact[-1])}\n"
         f"A3 nprop: sum={float(nprop.sum()):.4e} max={int(nprop.max())} "
-        f"p50={int(np.median(nprop))} -- k_accept_serial walks this many "
+        f"p50={int(np.median(nprop))}, k_accept_serial walks this many "
         f"proposals on ONE thread, and each is sorted twice\n"
         f"A3 node-visits done={w_node:.4e} useful={u_node:.4e} "
         f"ceiling on listing speedup={bound:.1f}x\n"
@@ -148,7 +148,7 @@ def main():
     )
     # Ledger for the three per-iteration passes A3 removed. All three were
     # bandwidth, not algorithm, and none of them can be measured on a shared
-    # card -- so account for them in bytes, from the per-iteration nlive the
+    # card, so account for them in bytes, from the per-iteration nlive the
     # profile already records, rather than from a stopwatch.
     #
     #   copyback   hash_combine_live copied its four emitted arrays back over

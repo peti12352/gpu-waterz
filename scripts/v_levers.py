@@ -74,7 +74,7 @@ def main():
                 and abs(float(b.get("eps", -1)) - args.eps[0]) < 1e-12
                 and b.get("size_asym", True)
                 and abs(float(g0.get("threshold", args.threshold))
-                        - args.threshold) < 1e-12):
+ - args.threshold) < 1e-12):
             reused = b
             print(f"V reusing locked row from {g0p.name} "
                   f"(nmerge={b['nmerge']} sum_nlive={b['sum_nlive']})",

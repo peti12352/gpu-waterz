@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """N19 X1: PRUF-style affinity-bits probe (NOT grayscale S1 drop-in).
 
-Uses existing WS with env that coarsens flow differently — if PRUF code
+Uses existing WS with env that coarsens flow differently: if PRUF code
 unavailable, runs WATERZ_COARSE as banned; instead: document refuse of
 grayscale PRUF and try affinity pipeline via existing segment + stamp.
 

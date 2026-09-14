@@ -79,7 +79,7 @@ need not match waterz; the partition is what is graded.
 | 0.4 | 0.5162 | 0.5378 | 0.2268 | 0.2381 |
 | 0.5 | 0.6129 | 0.6309 | 0.2184 | 0.2293 |
 
-Those two VOI numbers are what older notes call "both halves" — not two
+Those two VOI numbers are split and merge on the same volume, not two
 spatial crops. Mutex, Kruskal, and frozen-edge MST produce different
 partitions on the same RAG: [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
 
@@ -97,7 +97,7 @@ affinity 0.3. Pin `data/cache/N19_I0_REPRO.json`.
 | end-to-end | 3093 (~0.70 Gvox/s) |
 
 Four-threshold VOI: PASS. Two full runs, identical labels. A busy GPU
-makes these times meaningless (one co-tenant run moved 1634–5018 ms).
+makes these times meaningless (one co-tenant run moved 1634-5018 ms).
 
 Env used for that pin:
 
@@ -108,7 +108,8 @@ WATERZ_FUSE_DIRTY=1 WATERZ_NLIVE_ARITH=1 WATERZ_EMIT_HOLES=1
 ```
 
 Do not turn on `WATERZ_LISTED_INSERT`, `WATERZ_LISTED_REBUILD`,
-`WATERZ_SLOT_EMIT`, or `WATERZ_LIST_JUMP` by default.
+`WATERZ_SLOT_EMIT`, or `WATERZ_LIST_JUMP` by default. Stacked they cut
+2.16 agg by ~56 ms; that is optional env, not this pin.
 
 ```
 bash scripts/legal_eval.sh

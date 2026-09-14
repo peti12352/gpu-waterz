@@ -67,9 +67,9 @@ def main():
         print(f"N18 B2 eps={eps} voi={voi.get('ok')} four={four_ok}", flush=True)
         if not four_ok:
             stamp("N18_B2", f"four-T FAIL at related path eps={eps}", row, "notes/N18_B2.md")
-            # Plan: any four-T FAIL → kill; but four uses 0.08 always.
+            # Plan: any four-T FAIL -> kill; but four uses 0.08 always.
             # Speed eps only needs T=0.3 VOI; four-T is the product accuracy gate
-            # with ε=0.08. If four fails it's env stack not eps — still record.
+            # with ε=0.08. If four fails it's env stack not eps: still record.
         if voi.get("ok") and four_ok:
             best = eps
 
@@ -85,7 +85,7 @@ def main():
         f"# N18 B2 ε sweep (0.40, 0.5)\n\n{CLAIM}.\n\n"
         f"- best_eps={best}\n"
         f"- four-T always ε=0.08; speed path sweeps T=0.3 only\n"
-        f"- ε≥0.5 remains dead\n"
+        f"- ε>=0.5 remains dead\n"
     )
     print(json.dumps({"best_eps": best, "n": len(rows)}), flush=True)
     return 0 if best is not None else 1

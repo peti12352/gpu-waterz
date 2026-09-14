@@ -1,4 +1,4 @@
-# N21 finish -- listed contract + list-compress
+# N21 finish: listed contract + list-compress
 
 Campaign closed on greengoblin (idle RTX 5090). Not a 2 Gvox/s number;
 not 3090 Ti. Product default still E6s. Dual-eps 0.08 four-T / 0.40 T=0.3.

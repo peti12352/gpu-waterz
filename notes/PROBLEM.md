@@ -3,7 +3,7 @@
 Living status: [WHERE_WE_ARE.md](WHERE_WE_ARE.md). Campaign:
 [ATLAS.md](ATLAS.md). Product docs: [../README.md](../README.md).
 
-## Problem A -- faster contact-mean agglomeration under VOI
+## Problem A: faster contact-mean agglomeration under VOI
 
 On the CREMI-A contact-mean RAG (7.5M edges @ val, ~90M @ 2.16 Gvox), build a
 GPU agglomerator such that:
@@ -19,7 +19,7 @@ graph cannot go much below that floor.
 N20 closed the "new HAC class" branch of (2). Remaining agg win is engineering
 of the existing ParHAC matching + S3 contract. Unique-kernel floors from
 `data/cache/N21_D0_OWNERS.json` (do not add NVTX `:hash_rewrite` 286.9 on top
-of `k_rewrite_dirty_fuse` 273.0 — they overlap):
+of `k_rewrite_dirty_fuse` 273.0; they overlap):
 
 - rebuild+fuse 551.4 ms vanish -> leftover agg **~1128 ms**
 - plus insert+emit (four-kernel 886.1) vanish -> leftover **~794 ms**
@@ -49,7 +49,7 @@ Current stage breakdown (idle RTX 5090, pin `data/cache/N19_I0_REPRO.json`):
 
 Dual-eps: 0.08 four-T, 0.40 single T=0.3. eps in (0.41, 0.49) and >=0.5 dead.
 
-## Problem B -- watershed list-compress
+## Problem B: watershed list-compress
 
 `k_w5_compress_list` is ~508 ms of the watershed stage. Improving it requires
 preserving S1 plateau/basin semantics (four-T VOI + identity diagnostic).

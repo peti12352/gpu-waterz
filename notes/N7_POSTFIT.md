@@ -1,4 +1,4 @@
-# N7 — post-fit remesure
+# N7: post-fit remesure
 
 Date: 2026-09-06. Contract: TASK.md. Not a 2 Gvox/s claim. No 2.16 allocation.
 
@@ -15,7 +15,7 @@ Idle 5090, parked aff + DoubleBuffer + `WATERZ_AGG_LEVERS=15` + `WATERZ_STAGE_MS
 | agg | 317.61 (p0aa) | 351.72 (STAGE_MS) |
 | extract | 3.434 (device) | 1.68 |
 | leftover | 96.08 | **2.19** |
-| parked | — | True |
+| parked |: | True |
 | backend | gpu_dev | gpu_dev |
 
 Val throughput: 180e6 / 1.669 s = **0.108 Gvox/s**. Pre-fit G15 was 0.188 Gvox/s.
@@ -32,4 +32,4 @@ WS wall +736 ms vs the old 536 line. Divide-only was 1.19 ms; the rest is host m
 
 N0 `SCALE=21.333` applied to this WS wall prints 29 s / 0.074 Gvox/s. That overstates the device part (UF ~224 ms) and is the wrong tool for a host-park dominated stage. Do not quote 29 s as a TASK number.
 
-The val number is enough: this path is **18.5×** under 2 Gvox/s on the 5090 at 180 Mvox, before 3090 Ti or 2.16 Gvox.
+The val number is enough: this path is **18.5x** under 2 Gvox/s on the 5090 at 180 Mvox, before 3090 Ti or 2.16 Gvox.

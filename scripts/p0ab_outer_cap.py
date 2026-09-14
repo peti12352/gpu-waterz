@@ -95,7 +95,7 @@ def main():
     chosen = keep_cap
     voi = None
     if chosen is None:
-        # no exact merge match — still try smallest-drift cap only if drift==0 was required
+        # no exact merge match: still try smallest-drift cap only if drift==0 was required
         print("P0ab no cap matched E6s nmerge; revert to 64", flush=True)
         chosen = 64
     elif os.environ.get("WATERZ_P0AB_NOGRADE"):

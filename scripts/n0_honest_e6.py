@@ -2,7 +2,7 @@
 """N0: recalibrate E6 without dumping leftover into extract.
 
 E6-as-written set extract_val = e2e - 536 - 9 - agg (~96 ms) and scaled it
-by 21.333 → 2049 ms. Real extract on val was 3.434 ms (LOG E10). The 96 ms
+by 21.333 -> 2049 ms. Real extract on val was 3.434 ms (LOG E10). The 96 ms
 is alloc / e9c / sync leftover. This file attributes that leftover three
 ways and writes the honest stack the plan uses (leftover absorbed into WS).
 

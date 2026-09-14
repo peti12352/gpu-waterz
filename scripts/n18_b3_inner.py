@@ -43,10 +43,10 @@ def main():
     # Probe a non-reopened lever: WATERZ_HASH_WIDTH scale (if supported) or
     # document that ParHAC is local max after emit_holes.
     # Use WATERZ_COMPACT_EVERY=0 explicitly (already default) vs measuring
-    # WATERZ_LAYER_PARALLEL if absent → honest exit.
+    # WATERZ_LAYER_PARALLEL if absent -> honest exit.
     extra = {**DEEP, "WATERZ_EMIT_HOLES": "1", "WATERZ_NLIVE_ARITH": "1"}
     # Try reducing rebuild frequency via COMPACT_EVERY=8 only as diagnostic
-    # (compact_every default was killed as product default — env-only probe ok)
+    # (compact_every default was killed as product default: env-only probe ok)
     os.environ["WATERZ_N18_EXP"] = "N18_B3"
     rc, doc = run_gate(
         "N18_B3",
@@ -76,7 +76,7 @@ def main():
         f"- agg={agg} cut_vs_n17={cut:.1f} kill={kill} reason={reason}\n"
         f"- fuse_pack/unmark/graph not reopened\n"
         f"- If kill: declare ParHAC local maximum; remaining gap "
-        f"agg need ~3× from {N17_AGG} toward ≤1000\n"
+        f"agg need ~3x from {N17_AGG} toward ≤1000\n"
     )
     if kill:
         stamp("N18_B3", reason, {"agg": agg, "cut": cut}, "notes/N18_B3.md")

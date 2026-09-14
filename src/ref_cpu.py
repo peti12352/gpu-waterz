@@ -1,4 +1,4 @@
-"""CPU oracle for S1–S4. No GPU. Affinity is float32 [3,Z,Y,X] in [0, 1]."""
+"""CPU oracle for S1-S4. No GPU. Affinity is float32 [3,Z,Y,X] in [0, 1]."""
 from __future__ import annotations
 
 import heapq

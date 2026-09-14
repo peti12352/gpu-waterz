@@ -53,9 +53,9 @@ def main():
     giant = frac > 0.2
     print(f"  max/fg={frac:.6f} giant={giant}")
     if giant:
-        print("E9a GIANT plateau >20% fg — E9b cannot save that component")
+        print("E9a GIANT plateau >20% fg: E9b cannot save that component")
     else:
-        print("E9a no giant plateau — E9b independent FIFO is the speed path")
+        print("E9a no giant plateau: E9b independent FIFO is the speed path")
 
 
 if __name__ == "__main__":

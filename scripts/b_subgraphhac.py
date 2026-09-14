@@ -7,7 +7,7 @@ TeraHAC Def. 1 / DynHAC Def. 2: an edge is (1+ε)-good iff
 
 Union currently-good above-T edges, remap, recompute best, repeat.
 Gate: VOI at T=0.3 vs TASK slack, and work vs locked E6s T=0.3 (235 inners).
-Close the class if VOI fails or there is no 1.96× work cut. No CUDA.
+Close the class if VOI fails or there is no 1.96x work cut. No CUDA.
 """
 from __future__ import annotations
 

@@ -29,7 +29,7 @@ IMPOSSIBLE_MS = 2000.0
 
 
 def official_216():
-    """Official make_big 3×2×2, already-written h5, or build it here."""
+    """Official make_big 3x2x2, already-written h5, or build it here."""
     candidates = [
         ROOT / "data/ws_bounty/big/affinity.h5",
         ROOT / "data/cache/big_216.h5",

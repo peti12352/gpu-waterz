@@ -116,7 +116,7 @@ def main():
     p1, ms1, rc1, st1 = run_parhac(u2, v2, sm2, ct2, max_id, 0.3, 0.40)
     split, merge, nseg = voi_parent_mmap(p1)
     ok, _, _ = grade_t3(split, merge)
-    # four-T on filtered graph via temporary — use grade at 0.08 multi
+    # four-T on filtered graph via temporary: use grade at 0.08 multi
     from _agg_common import AFF_THRESHOLDS, grade_parents
     from n12_compact import bind, run_parhac as rp
     lib = bind(ctypes.CDLL(str(DSO)))
@@ -137,7 +137,7 @@ def main():
     OUT.write_text(json.dumps(doc, indent=2) + "\n")
     NOTE.write_text(
         f"# N19 H2 NNG\n\n{CLAIM}.\n\n"
-        f"- edges {len(u)}→{nkeep}\n"
+        f"- edges {len(u)}->{nkeep}\n"
         f"- voi_ok={ok} four_ok={four_ok} kill={kill} reason={reason}\n"
         f"- no 2.16 on FAIL\n"
     )

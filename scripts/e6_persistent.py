@@ -28,7 +28,7 @@ def main():
             "is not a G6 path on the locked mean-ε."
         )
         return
-    print("E6 inners<=400 — not implemented in this cycle (would be next)")
+    print("E6 inners<=400: not implemented in this cycle (would be next)")
     raise SystemExit(2)
 
 

@@ -13,7 +13,7 @@ Experiment log, not the library manual. Product docs: [README](../README.md),
 | [LOG.md](LOG.md) | Running lab diary |
 | `N*.md`, `B*.md` | Per-trial stamps; `*_WIN.md` is the night summary |
 
-Dead lists: `data/cache/n19_dead.jsonl` … `n23_dead.jsonl`.
+Dead lists: `data/cache/n19_dead.jsonl` ... `n23_dead.jsonl`.
 Machine-readable atlas: `data/cache/voi_atlas.csv`.
 
 [TASK.md](../TASK.md) is the original bounty listing (quality table source).

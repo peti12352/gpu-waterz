@@ -49,7 +49,7 @@ __global__ void k_build_inc(
 }
 
 // Parallel enqueue: each edge inserts itself into its bin via atomic head push
-// (LIFO within bin — still multi-bin parallel, not serial FIFO drain).
+// (LIFO within bin: still multi-bin parallel, not serial FIFO drain).
 __global__ void k_enqueue_par(
     const double* sm, const int64_t* ct, int64_t nedge,
     int* bin_head, int* bin_next, uint8_t* deleted)

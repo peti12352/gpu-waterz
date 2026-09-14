@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N18 experiment runner: A1–A5, B0–B3, C scaffolding.
+"""N18 experiment runner: A1-A5, B0-B3, C scaffolding.
 
 Not a 2 Gvox/s claim. Not 3090 Ti. Parks off. card_busy refuse.
 Subprocess per env. Abort timers via n18_voi_gate.
@@ -164,7 +164,7 @@ def main():
             ws_stop = True
             note(NOTE_DIR / "N18_A_STOP.md", (
                 f"# N18 A-track stop\n\n{CLAIM}.\n\n"
-                f"After A2–A5 no experiment achieved WS≤900 with four-T PASS. "
+                f"After A2-A5 no experiment achieved WS≤900 with four-T PASS. "
                 f"best_legal_ws={best_ws}. Freeze WS; dump EV into Track B.\n"
             ))
             log_block("N18_A_STOP", [f"best_legal_ws={best_ws} freeze WS track"])

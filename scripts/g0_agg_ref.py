@@ -4,8 +4,8 @@
 This exists because the machine has no GPU and the g1-g4 changes touch a hot
 path whose whole value is that it is bit-identical. Writing that CUDA blind and
 calling it done would be worthless. So instead the algorithm is re-implemented
-here in numpy twice -- once mirroring the current kernel sequence, once with the
-active-list / dirty-set / root-list restructuring -- and the two are required to
+here in numpy twice, once mirroring the current kernel sequence, once with the
+active-list / dirty-set / root-list restructuring, and the two are required to
 agree exactly.
 
 Why a sequential replica can be exact. Every racing write in the GPU loop is

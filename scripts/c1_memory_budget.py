@@ -2,7 +2,7 @@
 """C1: measure the pipeline's device footprint, then predict the graded volume.
 
 The TASK target is 2.16 Gvox on a 24 GB RTX 3090 Ti. That case cannot be
-measured directly -- it does not fit on the dev 5090 either, and attempting it
+measured directly, it does not fit on the dev 5090 either, and attempting it
 would OOM a shared GPU. So instead every cudaMalloc in ws.cu / rag.cu /
 parhac_d.cu is counted (see the accounting note at the top of each), the exact
 peak is measured at val scale where it does fit, the per-voxel coefficient is
@@ -219,7 +219,7 @@ def main():
 
     target = rows[-1]
     ok = target["fits_3090ti_24gib"]
-    print(f"\nC1 {'PASS' if ok else 'FAIL'} — 2.16 Gvox needs "
+    print(f"\nC1 {'PASS' if ok else 'FAIL'}: 2.16 Gvox needs "
           f"{target['concurrent_peak_gib']:.2f} GiB of a 24 GiB 3090 Ti",
           flush=True)
     return ok

@@ -10,7 +10,7 @@ hinges on one number: how many hook+compress rounds the cross-tile stitch
 needs, against how many the current whole-volume loop needs.
 
 That number depends only on component geometry, and `data/cache/gpu_fragments.npy`
-is exactly the component geometry the graded pipeline produces -- 2175400
+is exactly the component geometry the graded pipeline produces, 2175400
 fragments over 125x1200x1200. So it can be measured here without a card.
 
 The flow graph itself is not recoverable from the labels, since k_flow needs
@@ -19,10 +19,10 @@ built on each fragment and both are reported, because the true flow graph sits
 between them:
 
   dense   every 6-adjacent same-label pair. The most edges a fragment can
-          have, so the fewest rounds -- an optimistic bound.
+          have, so the fewest rounds, an optimistic bound.
   tree    a BFS spanning tree of each fragment from its minimum-index voxel.
           The fewest edges that still connect it, so the longest chains and
-          the most rounds -- a pessimistic bound. This is the closer of the
+          the most rounds, a pessimistic bound. This is the closer of the
           two in kind, since a flow field is a forest pointing at minima.
 
 Both bounds are measured for the baseline and for W5 on the same graph, so the

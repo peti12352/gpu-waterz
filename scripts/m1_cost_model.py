@@ -4,7 +4,7 @@ timing measurement in this repo that is not contention noise.
 
 Why this exists. Every speed conclusion in notes/LOG.md was drawn from wall
 clock taken on a shared card, where a4_sync_cost.json measures the round-trip
-quantum at 883 us contended against 2.55 us idle -- a 346x distortion that is
+quantum at 883 us contended against 2.55 us idle, a 346x distortion that is
 not uniform across phases, because it scales with the number of launches and
 syncs a phase performs rather than with the work it does. Ranking phases by
 those numbers ranks them by launch count. That is how "compact 1760 ms, sort
@@ -13,7 +13,7 @@ iteration.
 
 So this does not use the phase timings as costs at all. It builds the cost from
 array widths and launch counts read out of csrc/parhac_d.cu, sums the bytes,
-and divides by one free parameter -- achieved bandwidth -- which is then fixed
+and divides by one free parameter, achieved bandwidth, which is then fixed
 by requiring the model to reproduce a4_sync_cost.json's 667.58 ms. If the
 implied efficiency lands at a plausible fraction of the 5090's 1792 GB/s the
 model is trustworthy; if it lands above 100% or at 3% the model is wrong and
@@ -346,7 +346,7 @@ def ws_model(card="3090Ti", plateau_rounds=7, basin_rounds=7,
     # with no reciprocal edge issues no hook at all: launching over the
     # compacted list of voxels that have one is definitionally identical, the
     # same argument that makes g3's active-edge list exact. That is 35.6% of
-    # the volume on val. It applies to the plateau half only -- after the
+    # the volume on val. It applies to the plateau half only, after the
     # divide almost every voxel carries a bit, so the basin hook has no such
     # list to restrict to.
     terms_tiled = [
@@ -410,7 +410,7 @@ def levers(c, cal, nvox, card="3090Ti"):
     That matters because the first version of this table used p0z_starmarge's
     ndirty_mean and claimed 74x for g2. The measured figure is ~8x. The gap is
     that p0z reports the blue-side dirty count in ndirty and the red-side count
-    in nstar, and the red side is nine times larger -- a receiving red's
+    in nstar, and the red side is nine times larger, a receiving red's
     incidence row has to be rescanned too, and rows grow as clusters merge.
     """
     base = project(c, cal, nvox, card)
@@ -486,8 +486,8 @@ def measured_work():
 
     Refused unless the replica ran base and fast to convergence on the whole
     val graph and they agreed. A subgraph or a truncated run has different
-    visit ratios -- the per-outer sweeps are O(nnode) while the proposals are
-    not -- so using one here would quietly mis-size every lever.
+    visit ratios, the per-outer sweeps are O(nnode) while the proposals are
+    not, so using one here would quietly mis-size every lever.
     """
     p = CACHE / "g0_agg_ref.json"
     if not p.is_file():

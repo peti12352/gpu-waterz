@@ -1,4 +1,4 @@
-# Threshold unit — locked from shipped script
+# Threshold unit: locked from shipped script
 
 API thresholds are affinity; see [docs/usage.md](../docs/usage.md). This
 file is the lock against the shipped baseline script.

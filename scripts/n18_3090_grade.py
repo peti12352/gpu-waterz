@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""N18 C: 3090 Ti grade path — median-of-5 e2e + peak.
+"""N18 C: 3090 Ti grade path: median-of-5 e2e + peak.
 
 Refuse unless nvidia-smi reports a real RTX 3090 Ti.
-Do not flip C++ defaults without median≥claim and 24 GB peak fit.
+Do not flip C++ defaults without median>=claim and 24 GB peak fit.
 Also writes 1.44 Gvox report (TASK also-report).
 
 Not a 2 Gvox/s claim from 5090. Not runnable on greengoblin 5090.
@@ -63,7 +63,7 @@ def main():
             f"# N18 C 3090 Ti grade\n\n"
             f"- GPU: `{name}`\n"
             f"- REFUSE: script blocks until real 3090 Ti\n"
-            f"- No C++ default flip without median≥2 Gvox/s AND peak≤24 GB\n"
+            f"- No C++ default flip without median>=2 Gvox/s AND peak≤24 GB\n"
             f"- Never claim 2 Gvox/s from 5090\n"
             f"- When on 3090 Ti: warmup + median/min/max of 5 CUDA-event e2e "
             f"on official 2.16 @ T=0.3; also report 1.44 Gvox; parks off; "
@@ -95,7 +95,7 @@ def main():
     gvox = (2.16 / (median / 1000.0)) if median else 0
     peaks = [float((x.get("ws_mem_peak") or x.get("peak_giB") or 0)) for x in runs]
     peak = max(peaks) if peaks else 0
-    # SHARE_OFF headroom: +4 B/vox ≈ +8 GB at 2.16 — check peak + headroom ≤ 24
+    # SHARE_OFF headroom: +4 B/vox ≈ +8 GB at 2.16: check peak + headroom ≤ 24
     share_off_headroom_gib = 8.0
     fits = (peak + share_off_headroom_gib) <= 24.0
     claim_ok = gvox >= 2.0 and fits
@@ -115,7 +115,7 @@ def main():
     NOTE.write_text(
         f"# N18 C 3090 Ti grade\n\n"
         f"- GPU: `{name}`\n"
-        f"- median e2e={median:.1f} ms → {gvox:.3f} Gvox/s\n"
+        f"- median e2e={median:.1f} ms -> {gvox:.3f} Gvox/s\n"
         f"- peak={peak:.2f} GiB fits24={fits} flip_defaults={claim_ok}\n"
     )
     print(json.dumps({"median_ms": median, "gvox_s": gvox, "flip": claim_ok}),

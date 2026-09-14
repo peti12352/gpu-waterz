@@ -16,7 +16,7 @@ AFF = ROOT / "data/ws_bounty/cremiA_val/affinity.h5"
 GT = ROOT / "data/ws_bounty/cremiA_val/gt.h5"
 VOI = ROOT / "data/ws_bounty/baseline/voi.csv"
 CACHE = ROOT / "data/cache"
-# waterz sorts scores ascending → aff 0.5, 0.4, 0.3, 0.2
+# waterz sorts scores ascending -> aff 0.5, 0.4, 0.3, 0.2
 SCORE_THEN_AFF = [(0.5, 0.5), (0.6, 0.4), (0.7, 0.3), (0.8, 0.2)]
 EPS = 0.005
 

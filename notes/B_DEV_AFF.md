@@ -1,4 +1,4 @@
-# B — device-path aff park after k_flow
+# B: device-path aff park after k_flow
 
 Date: 2026-09-06. Not a 2 Gvox/s claim.
 
@@ -10,7 +10,7 @@ External tensors are left resident.
 
 - nfrag 2175400, `wz_fragments.npy` **array_equal=True**
 - held vs parked labels identical
-- tracked peak **2.698 → 2.195 GiB** (saved 0.503 GiB = val aff)
+- tracked peak **2.698 -> 2.195 GiB** (saved 0.503 GiB = val aff)
 - same byte cut as host `e9c_watershed` free-aff
 
 Fused 2.16 Gvox WS still needs remaining W2 levers; do not run 2.16.

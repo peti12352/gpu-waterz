@@ -78,9 +78,9 @@ def main():
         (ROOT / "data/cache/c19_pass.txt").write_text(f"SKIP residual={residual}\n")
         raise SystemExit(2)
     # Grade the coarsened partition at all four T by continuing BinMatch down to 0.2
-    # (S4 tail would be better; residual<50k heap is fast — use binmatch full table
+    # (S4 tail would be better; residual<50k heap is fast: use binmatch full table
     # as a stand-in only if we already have parents at tau; instead re-run B18).
-    print("C19 residual<50k — running full B18 as coarsen+continue (S4 tail via binmatch bins)")
+    print("C19 residual<50k: running full B18 as coarsen+continue (S4 tail via binmatch bins)")
     from b18_binmatch import main as b18
 
     sys.argv = ["b18_binmatch.py", "--bins", "256"]

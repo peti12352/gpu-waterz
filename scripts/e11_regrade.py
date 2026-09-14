@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""E11: G4r → G5r → G6r after current locks. No 3090 Ti number."""
+"""E11: G4r -> G5r -> G6r after current locks. No 3090 Ti number."""
 from __future__ import annotations
 
 import subprocess
@@ -63,7 +63,7 @@ def main():
         f"extract={text:.3f} total={tot:.3f} "
         f"{'PASS' if tot < 0.050 else 'FAIL'} (need <0.050s)"
     )
-    print("E11 G9 BLOCKED — no 3090 Ti")
+    print("E11 G9 BLOCKED: no 3090 Ti")
 
 
 if __name__ == "__main__":

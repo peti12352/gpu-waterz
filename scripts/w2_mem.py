@@ -19,8 +19,8 @@ driver's own context. The plan's "~23 GiB" does not follow from its own list.
 
 Second, and worse, the -3.5 B/vox from block labels is not available at all.
 scripts/w0_ws_ref.py shows that contracting each 2x2x2 block to a single label
-is unsound for this watershed -- it collapses the whole volume into one or two
-components in 40 of 40 checks -- and the sound variant needs one slot per
+is unsound for this watershed, it collapses the whole volume into one or two
+components in 40 of 40 checks, and the sound variant needs one slot per
 intra-block connectivity class, which the same sweep measures at a mean of
 2.3-5.6 and a maximum of 8. Eight slots of uint32 is 4 B/vox, exactly what the
 per-voxel array already costs. So W1 yields no memory saving, and W2 has to

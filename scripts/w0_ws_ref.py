@@ -25,8 +25,8 @@ file models the two older ones, not the one in production:
                      produced data/cache/gpu_fragments.npy and nfrag=2175400.
 
 All three are replicated here, and diffing them gives a useful result:
-`plateau_basins` is an exact specification of e9 -- identical partitions on
-every case tried -- while `watershed_device` differs on every case. So W1's
+`plateau_basins` is an exact specification of e9, identical partitions on
+every case tried, while `watershed_device` differs on every case. So W1's
 gate, "array_equal against the current watershed", can be discharged on a CPU
 against the sequential host routine in under a second. `watershed_device`
 cannot be used as an oracle for anything.
@@ -498,7 +498,7 @@ def face_pairs(Z: int, Y: int, X: int, d: int) -> tuple[np.ndarray, np.ndarray]:
 
 def reciprocal_edges(bits: np.ndarray, Z: int, Y: int, X: int
                      ) -> tuple[np.ndarray, np.ndarray]:
-    """Faces where both voxels point at each other -- k_hook_bidir's edge set."""
+    """Faces where both voxels point at each other, k_hook_bidir's edge set."""
     us, vs = [], []
     for d in (3, 4, 5):
         i, j = face_pairs(Z, Y, X, d)
@@ -533,8 +533,8 @@ def flow_edges(bits: np.ndarray, Z: int, Y: int, X: int
 def cc_min_root(n: int, ei: np.ndarray, ej: np.ndarray, W: Work) -> np.ndarray:
     """Root array after k_hook_* / k_uf_compress_c have run to convergence.
 
-    Every hook in ws.cu makes the smaller index the parent -- `atomicMin` in
-    k_hook_bidir and k_hook_remain, `lo` in uf_hook -- so the fixed point is
+    Every hook in ws.cu makes the smaller index the parent, `atomicMin` in
+    k_hook_bidir and k_hook_remain, `lo` in uf_hook, so the fixed point is
     independent of the interleaving and the root of a component is its minimum
     member. That is what makes it legitimate to compute the converged partition
     directly instead of simulating the rounds. Round *counts* do depend on the
@@ -573,9 +573,9 @@ def tiled_hook_edges(bits: np.ndarray, Z: int, Y: int, X: int,
                      ) -> set[tuple[int, int]]:
     """The edge set k_hook_bidir_tiled issues, using its exact index maths.
 
-    W4 replaces k_hook_bidir's (X/256, Y, Z) launch -- which puts a block's
+    W4 replaces k_hook_bidir's (X/256, Y, Z) launch, which puts a block's
     +/-z neighbour X*Y*4 bytes away, 23 MB at 2.16 Gvox, and so misses a 6 MB
-    L2 on every one of six gathers per voxel per round -- with a 32x4x4 tile
+    L2 on every one of six gathers per voxel per round, with a 32x4x4 tile
     staged in shared memory along with its one-voxel halo.
 
     Correctness of that kernel reduces to one claim: it issues hooks for
@@ -585,8 +585,8 @@ def tiled_hook_edges(bits: np.ndarray, Z: int, Y: int, X: int,
     point of min-index hooking is the component minimum for any read order.
     Dropping or inventing an edge would matter, and a halo off-by-one is the
     obvious way to do that. So this replicates the shared-memory indexing
-    literally -- ws_sidx, the (gx, gy, gz) bounds test, the inert bits=0 fill
-    for out-of-volume slots -- and the caller diffs it against the untiled set.
+    literally, ws_sidx, the (gx, gy, gz) bounds test, the inert bits=0 fill
+    for out-of-volume slots, and the caller diffs it against the untiled set.
     """
     SX, SY = TX + 2, TY + 2
     dlz = (-1, 0, 0, 1, 0, 0)
@@ -663,7 +663,7 @@ def uf_rounds(n: int, ei: np.ndarray, ej: np.ndarray) -> int:
     parent snapshot (`atomicMin` into the round's output), then
     k_uf_compress_c flattens, and the caller stops when a round changes
     nothing. The device is asynchronous and can converge in fewer rounds, so
-    this is an upper bound on its count -- but it scales the same way, which is
+    this is an upper bound on its count, but it scales the same way, which is
     the question being asked.
 
     Why it matters: the plan's whole scaling argument is that "iteration counts
@@ -671,7 +671,7 @@ def uf_rounds(n: int, ei: np.ndarray, ej: np.ndarray) -> int:
     agglomeration, because make_big.py mirror-tiles the volume so the graph is
     12 disjoint copies. It cannot be true for a union-find, whose round count
     grows with the longest chain it has to collapse, and the graded volume is
-    3x2x2 tiles of val -- so chains that ran along an axis get up to 3x longer.
+    3x2x2 tiles of val, so chains that ran along an axis get up to 3x longer.
     """
     parent = np.arange(n, dtype=np.int64)
     rounds = 0
@@ -850,7 +850,7 @@ def assert_bg_isolated(bits: np.ndarray, Z: int, Y: int, X: int) -> None:
     e9c's k_root_flag only allocates a label to a root with bits != 0, while
     k_write_labels gives every bits != 0 voxel `psum[parent[i]] + 1`. If a
     component's minimum member had bits == 0 it would be an unflagged root, and
-    psum at that index is the count of flagged roots below it -- i.e. some other
+    psum at that index is the count of flagged roots below it, i.e. some other
     fragment's label. So the labelling is only collision-free because zero-bit
     voxels are isolated in the flow graph.
 
@@ -1142,7 +1142,7 @@ def w1_block_check(bits: np.ndarray, Z: int, Y: int, X: int,
 
 def synth(shape: tuple[int, int, int], seed: int, levels: int) -> np.ndarray:
     """Synthetic affinities with a deliberately small number of distinct
-    values, so ties -- and therefore plateaus -- are common. Real CREMI
+    values, so ties, and therefore plateaus, are common. Real CREMI
     affinities tie far less often, which makes this the harder input for every
     plateau code path.
     """

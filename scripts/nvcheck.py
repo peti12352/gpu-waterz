@@ -10,7 +10,7 @@ headers, so this pulls the headers out of the pip wheels NVIDIA publishes
 What this catches: syntax, name lookup, overload resolution, kernel launch
 argument types, template instantiation in CUB and Thrust. What it does not
 catch: anything about how the code behaves. It is a compile gate, not a
-correctness gate -- scripts/g0_agg_ref.py is the correctness gate, and the
+correctness gate, scripts/g0_agg_ref.py is the correctness gate, and the
 device fingerprint in a1_e6s_voi.json is the real one.
 
 Header-only, so ptxas and libdevice are never invoked and the CUDA version

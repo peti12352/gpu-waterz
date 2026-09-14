@@ -29,7 +29,7 @@ or proofread.
 Waterz **cannot unmerge**. Watershed must almost never cross a true
 membrane: one axon in many pieces is recoverable; two axons glued is a
 connectome error you do not get back. Extra plateau components are not
-dust — they are a different fragment class and fail VOI.
+dust. They are a different fragment class and fail VOI.
 
 Fragments are supervoxels. The object you count synapses on or load into a
 proofreading graph is **after** mean merge. `fragments()` is a stage hook;
@@ -45,7 +45,7 @@ two axons. Waterz grows conservative pieces, then glues them.
 neighbors. Below `aff_low` you are background; above `aff_high` you are
 definitely connected. A plateau (several voxels sharing the same max) is
 **one** basin, not one basin per pixel. That plateau rule is load-bearing.
-A tempting GPU shortcut — extra closed-plateau CCs — fails VOI. The BFS
+A tempting GPU shortcut (extra closed-plateau CCs) fails VOI. The BFS
 that rewrites plateaus is cheap (~14 ms on 2.16 Gvox). The expensive part
 is compressing the union-find (`k_w5_compress_list`, ~508 ms). Speeding up
 BFS does not speed up this watershed.
@@ -60,8 +60,8 @@ same dendrogram (0.2, 0.3, 0.4, 0.5).
 ## Contact-mean is not Kruskal
 
 When A and B merge into C, every neighbor of A or B now touches C. The mean
-on C–D is not `min(mean(A,D), mean(B,D))`. It is
-`(sum_AD + sum_BD) / (count_AD + count_BD)` — average linkage on the contact
+on C-D is not `min(mean(A,D), mean(B,D))`. It is
+`(sum_AD + sum_BD) / (count_AD + count_BD)`: average linkage on the contact
 graph, recomputed after every glue.
 
 Kruskal, mutex, single-linkage, and GASP AbsMax treat the original
@@ -73,7 +73,7 @@ weak contact can drag a previously strong pair below T.
 Same cached CREMI-A RAG, same VOI grader (`data/cache/voi_atlas.csv`):
 
 - Frozen connected components: giant object. Merge VOI around 7.5.
-- Mutex / GASP AbsMax: under-merge. Split VOI around 0.9–2.1.
+- Mutex / GASP AbsMax: under-merge. Split VOI around 0.9-2.1.
 - Kruskal SDSL: essentially no merges at the cuts we grade.
 
 Those are other products. Do not loosen +0.02 to "make mutex pass."
@@ -91,13 +91,13 @@ height.
 
 Variation of Information:
 
-- **split** `H(seg|gt)` — one true neuron, many labels (still chopped)
-- **merge** `H(gt|seg)` — two true neurons, one label (fused)
+- **split** `H(seg|gt)`: one true neuron, many labels (still chopped)
+- **merge** `H(gt|seg)`: two true neurons, one label (fused)
 
 Lower is better. Fusion is the expensive connectome mistake. The CREMI-A
 gate requires **both** numbers, at all four affinity cuts, within +0.02 of
 stock waterz on the whole val block `[3,125,1200,1200]`. Trading split
-against merge is a fail. +0.02 is about 1000× waterz's own run-to-run
+against merge is a fail. +0.02 is about 1000x waterz's own run-to-run
 jitter (~1.7e-05), not "VOI is fuzzy."
 
 IDs need not match waterz. Waterz is not even self-identical on plateaus.
@@ -117,7 +117,7 @@ does (1+eps)-heavy matching: many disjoint merges in a round if they are
 close enough to locally heaviest, then contract, repeat. On this RAG `eps`
 is a phase boundary, not a quality-vs-speed slider.
 
-- Four cuts (0.2–0.5): `eps = 0.08`. 0.09 already fails at 0.2.
+- Four cuts (0.2-0.5): `eps = 0.08`. 0.09 already fails at 0.2.
 - Single cut at 0.3: `eps = 0.40`. Every 0.01 step from 0.41 to 0.49 fails
   merge VOI (N18 B2).
 
@@ -151,10 +151,10 @@ timing or quality story.
 | Rule | Why |
 |---|---|
 | Dual-eps 0.08 / 0.40 | Measured so ParHAC still passes four-T / T=0.3 |
-| Fragment identity vs `wz_fragments.npy` | N18 A4: T=0.3 VOI looked OK after nfrag 2.175M → 3.14M |
+| Fragment identity vs `wz_fragments.npy` | N18 A4: T=0.3 VOI looked OK after nfrag 2.175M -> 3.14M |
 | Ignore val cuts under 100 ms before a 2.16 claim | N18 B3: a val "win" was slower on 2.16 |
 | Parks off (`HOST_PARK=0`, `AFF_PARK=0`) | Parked affinity timed PCIe and doubled e2e with the same labels |
 
 [funkey/waterz PR 24](https://github.com/funkey/waterz/pull/24) took CPU RAG
-52s → 18s and agglomeration 71s → 28s on 1024³-class volumes. That is the
+52s -> 18s and agglomeration 71s -> 28s on 1024³-class volumes. That is the
 CPU class this GPU path replaces.

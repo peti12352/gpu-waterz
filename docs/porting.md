@@ -66,8 +66,9 @@ WATERZ_FUSE_DIRTY=1 WATERZ_NLIVE_ARITH=1 WATERZ_EMIT_HOLES=1
 ```
 
 Do not default `WATERZ_LISTED_INSERT`, `WATERZ_LISTED_REBUILD`,
-`WATERZ_SLOT_EMIT`, `WATERZ_LIST_JUMP`. Identity-true on val; not taken to
-2.16.
+`WATERZ_SLOT_EMIT`, `WATERZ_LIST_JUMP`. They match parents and pass four-T.
+Stacked (N23 A0) they cut 2.16 agg by ~56 ms (1622-1624 vs 1679.9). That is
+an optional env, not the product default.
 
 ---
 

@@ -21,6 +21,7 @@ __pycache__/
 *.so
 *.egg-info/
 .ipynb_checkpoints/
+docs/hn.md
 papers/*.pdf
 papers/repos/
 papers/oa/

@@ -13,9 +13,9 @@ Each N: 2175401 nodes, 7505458 edges, merged 1853086, min score 0.00392157.
 | 4096 | 0.455129 | 0.241600 | 322314 | 25.0 | PASS |
 
 `voi.csv` T=0.3 is split 0.45379 / merge 0.24106 / nseg 322549. Same VOI and nseg
-across N — at T=0.3 the binned FIFO did not change the scored partition between
+across N: at T=0.3 the binned FIFO did not change the scored partition between
 256 and 4096 bins.
 
-**No GPU bucket.** PASS is an order approximation of the exact heap, not a 12×
-device path. No propose-visit count was taken on this run, so the ≥5× visit
-gate is unmet. N7 already showed E2 visits ≠ wall. `gpu_bucket=false`.
+**No GPU bucket.** PASS is an order approximation of the exact heap, not a 12x
+device path. No propose-visit count was taken on this run, so the >=5x visit
+gate is unmet. N7 already showed E2 visits != wall. `gpu_bucket=false`.

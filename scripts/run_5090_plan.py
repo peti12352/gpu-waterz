@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P0aa → P0ab → E6uvw gate. Refuses to start if another process owns the GPU."""
+"""P0aa -> P0ab -> E6uvw gate. Refuses to start if another process owns the GPU."""
 from __future__ import annotations
 
 import json

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Device paper-ParHAC gate. LOCK iff VOI PASS and T=0.3 CUDA-event AGG≤50ms.
 
-G9 stays BLOCKED — no 3090 Ti. A 5090 number is not 2 Gvox/s.
+G9 stays BLOCKED: no 3090 Ti. A 5090 number is not 2 Gvox/s.
 """
 from __future__ import annotations
 
@@ -81,7 +81,7 @@ def main():
     compile_d()
     cap = _apply_p0ab_cap()
     print(
-        f"G9 BLOCKED — no 3090 Ti. WATERZ_MAX_OUTER={cap}. "
+        f"G9 BLOCKED: no 3090 Ti. WATERZ_MAX_OUTER={cap}. "
         "5090 CUDA-event is not a 2 Gvox/s claim.",
         flush=True,
     )
@@ -133,14 +133,14 @@ def main():
         stamp("e6r", True, f"LOCK device {path} ε=0.08 T03_ms={ms03:.2f}")
         print(
             f"{path} PASS LOCK T03_ms={ms03:.2f}. "
-            "G9 BLOCKED — no 3090 Ti. Do not write 2 Gvox/s.",
+            "G9 BLOCKED: no 3090 Ti. Do not write 2 Gvox/s.",
             flush=True,
         )
         return True
     extra = f"{'PASS' if ok else 'FAIL'} T03_ms={ms03:.2f} budget=50"
     stamp("e6r", False, extra)
     print(
-        f"{path} {extra}. G9 BLOCKED — no 3090 Ti. Planning target ~10 ms.",
+        f"{path} {extra}. G9 BLOCKED: no 3090 Ti. Planning target ~10 ms.",
         flush=True,
     )
     return False

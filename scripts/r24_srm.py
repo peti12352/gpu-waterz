@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""R24: Nock–Nielsen SRM on RAG node max-incident-mean + mean>T."""
+"""R24: Nock-Nielsen SRM on RAG node max-incident-mean + mean>T."""
 from __future__ import annotations
 
 import argparse

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """P1: official make_big 2-tile independence. Greengoblin only. Not a 2 Gvox/s claim.
 
-Imports official data/ws_bounty/make_big.py::mirror — not the N4 reconstruction.
+Imports official data/ws_bounty/make_big.py::mirror: not the N4 reconstruction.
 For each axis, builds a 2-tile concat and checks:
 
   1. seam plane of the join channel is identically zero

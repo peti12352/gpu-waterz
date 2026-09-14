@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""G16: G4r → G5r → G6r after current locks. GPU AGG only if a new lock has rounds≤30."""
+"""G16: G4r -> G5r -> G6r after current locks. GPU AGG only if a new lock has rounds≤30."""
 from __future__ import annotations
 
 import subprocess
@@ -96,7 +96,7 @@ def main():
     extract_parent(fr, snaps[0.3])
     text = time.perf_counter() - t0
     tot = tws + trag + tagg + text
-    # Working proxy: val AGG ≤50 ms (TASK 2 Gvox/s → ~90 ms e2e; WS+RAG+extract ~40 ms).
+    # Working proxy: val AGG ≤50 ms (TASK 2 Gvox/s -> ~90 ms e2e; WS+RAG+extract ~40 ms).
     g6 = "PASS" if tagg <= 0.050 else "FAIL"
     print(
         f"G16 G6r one-shot ws={tws:.3f} rag={trag:.3f} agg={tagg:.3f} "
@@ -124,7 +124,7 @@ def main():
         print("G16 GPU_AGG SKIP (Track B CPU lock; leftover≤5k is the G6 shape)")
     else:
         print("G16 GPU_AGG SKIP (no stamped lock)")
-    print("G16 G9 BLOCKED — no 3090 Ti")
+    print("G16 G9 BLOCKED: no 3090 Ti")
     print("G16 host segment() SV unchanged (not forced to 7)")
 
 

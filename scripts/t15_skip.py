@@ -16,7 +16,7 @@ def main():
     m16 = M16.is_file() and M16.read_text().strip() == "PASS"
     print(f"T15 t14_outer={outer} m16_pass={m16}")
     if m16:
-        print("T15 mutex PASS — GPU cub sort is the G6 path (not implemented this cycle; host UF is already 13s→need <10ms)")
+        print("T15 mutex PASS: GPU cub sort is the G6 path (not implemented this cycle; host UF is already 13s->need <10ms)")
         return
     if outer <= 30:
         print("T15 would implement persistent GPU good-matching; not reached")

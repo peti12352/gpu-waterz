@@ -216,7 +216,7 @@ static bool sort_pack() {
     return cached != 0;
 }
 
-// N18 A2: dense-remap plateau roots for vcount histogram (nvox → U≤nC).
+// N18 A2: dense-remap plateau roots for vcount histogram (nvox -> U≤nC).
 // Default off. Process-cached; subprocess per env.
 static bool vcount_compact() {
     static int cached = -1;
@@ -489,7 +489,7 @@ __global__ void k_flow(
     if (m > low) {
         float vals[6] = {nz, ny, nx, pz, py, px};
         if (flip) {
-            // Alternate tie-break: single steepest among ==m (dir high→low),
+            // Alternate tie-break: single steepest among ==m (dir high->low),
             // plus all dirs at/above high (threshold plateaus).
             int best = -1;
             for (int di = 0; di < 6; ++di) {
@@ -1614,7 +1614,7 @@ __global__ void k_uf_compress_c(uint32_t* p, int* changed, int64_t n) {
 // k_uf_compress_c walks each chain to its root and then walks it a second time
 // writing the root into every entry on the way. Timing the two kernels of the
 // round separately puts it at 317 ms of the union-find's 499 ms while moving
-// only about 2 GB, so it runs some 30x off bandwidth roofline -- the cost is
+// only about 2 GB, so it runs some 30x off bandwidth roofline, the cost is
 // chains of dependent random loads, not bytes.
 //
 // A jump is two loads and at most one store, and it halves every chain, so the
@@ -2348,7 +2348,7 @@ __global__ void k_gather_vcount_u32(
     vc[t] = vcount[keys[t]];
 }
 
-// N18 A2: open-addressing root→dense map for compact vcount.
+// N18 A2: open-addressing root->dense map for compact vcount.
 static constexpr uint32_t VC_HASH_EMPTY = 0xffffffffu;
 
 __global__ void k_vc_hash_clear(uint32_t* keys, uint32_t* ids, int cap)
@@ -3057,7 +3057,7 @@ static int e9b_divide_d(uint8_t* bits_d, int64_t Z, int64_t Y, int64_t X,
     {
         NvRange nv_vcount("vcount");
         if (vcount_compact() && !park) {
-            // Remap unique corner roots → dense [0,U), histogram into U slots.
+            // Remap unique corner roots -> dense [0,U), histogram into U slots.
             uint32_t* keys_sorted = nullptr;
             uint32_t* uniq = nullptr;
             int* d_num_selected = nullptr;
@@ -3683,7 +3683,7 @@ static int e9c_basins_d(const uint8_t* bits_d, uint32_t* seg_d, int64_t Z, int64
         w5_e4_union_find<false>(bits_d, parent, flag, Z, Y, X, "E9c");
     } else {
     k_parent_init<<<blocks, threads>>>(parent, size);
-    // This ran a host-fixed round count -- `ws_set_sv_rounds(7)`, tuned on the
+    // This ran a host-fixed round count, `ws_set_sv_rounds(7)`, tuned on the
     // 180 Mvox validation volume. That is the wrong shape twice over. Spare
     // rounds are full-volume sweeps, and worse, a volume needing more than the
     // tuned count would come out with basins still unmerged and no complaint:
@@ -4049,7 +4049,7 @@ __global__ void k_clear_slab_z_faces(uint8_t* bits, int64_t Z, int64_t Y, int64_
     bits[(Z - 1) * yx + i] &= (uint8_t)~0x08;  // z=Z-1: drop +z
 }
 
-// Official make_big 3×2×2 is [375,2400,2400]. Each z-tile is 125 and the
+// Official make_big 3x2x2 is [375,2400,2400]. Each z-tile is 125 and the
 // z-seam affinity is identically 0 (P1), so e9b/e9c on a tile is the same
 // partition as the fused volume. E4 stitch is vacuous on those seams.
 // Scratch is one tile, not 3, which is how 2.16 fits in 24 GiB.

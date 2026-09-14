@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N8: A/B WATERZ_UF_ALGO 0/2/3 on idle 5090. Keep W5 only if identity + ≥1.3×.
+"""N8: A/B WATERZ_UF_ALGO 0/2/3 on idle 5090. Keep W5 only if identity + >=1.3x.
 
 Not a 2 Gvox/s claim. No 2.16 allocation.
 """

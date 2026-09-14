@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""B: W2 first lever — free the host-path aff copy after k_flow.
+"""B: W2 first lever: free the host-path aff copy after k_flow.
 
 Measures val WS peak + nfrag/fingerprint vs wz_fragments.npy.
 Does not touch watershed_gpu_e9_d (caller aff lives for RAG).

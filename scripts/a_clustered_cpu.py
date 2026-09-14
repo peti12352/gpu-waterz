@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A: clustered-graph work gate after reading ParHAC §2.3 / p.23, not the abstract.
 
-E2 CSR already is MultiMerge (dirty walk + splice). The paper 7–11× is
+E2 CSR already is MultiMerge (dirty walk + splice). The paper 7-11x is
 Affinity/SCCsim GBBS vs clustered-graph (p.23), not ParHAC. This script
 records that from e2_csr_full.json + the pinned quotes. Optional --rerun
 replays g0 --csr on greengoblin; default does not.
