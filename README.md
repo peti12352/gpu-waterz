@@ -14,15 +14,12 @@ On CREMI-A val it tracks stock waterz to +0.02 VOI at 0.2, 0.3, 0.4, and
 0.5 (split and merge both). A second run is byte-identical. Idle RTX 5090:
 3.1 s for 2.16 Gvox, ~13 GiB peak vs ~42 fused.
 
+![3.1 s on 2.16 Gvox, idle RTX 5090](docs/speed_216.png)
+
 Same contact-mean merge as waterz. The heap order is approximated so it
 can run in parallel. Mutex, Kruskal, GASP, and the rest on this graph miss
-the VOI box:
-
-![VOI split vs merge at affinity 0.3](docs/voi_t03.png)
-
-Green is the waterz +0.02 gate. RNN and WPGMA sit on mutex; GASP and
-Kruskal are off this window ([voi_atlas.csv](data/cache/voi_atlas.csv)).
-Algorithm: [docs/decode.md](docs/decode.md).
+the VOI box: [voi_atlas.csv](data/cache/voi_atlas.csv). Algorithm:
+[docs/decode.md](docs/decode.md).
 
 ## Install
 
@@ -92,8 +89,7 @@ need not match waterz; the partition is what is graded.
 | 0.4 | 0.5162 | 0.5378 | 0.2268 | 0.2381 |
 | 0.5 | 0.6129 | 0.6309 | 0.2184 | 0.2293 |
 
-See the figure above. Full table:
-[data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
+Full table: [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
 
 ## Speed (idle RTX 5090)
 

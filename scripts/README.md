@@ -12,7 +12,7 @@ Product entry points and CPU replicas.
 | `w0_ws_ref.py` | CPU replica of affinity-flow watershed |
 | `g0_agg_ref.py` | CPU replica of device ParHAC |
 | `nvcheck.py` | clang `-fsyntax-only` on the CUDA sources, no GPU |
-| `plot_voi_atlas.py` | rebuild `docs/voi_t03.png` from `voi_atlas.csv` |
+| `plot_speed.py` | rebuild `docs/speed_216.png` from the 5090 pin JSON |
 
 ```
 bash scripts/build_cuda.sh
