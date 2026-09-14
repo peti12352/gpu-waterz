@@ -1,20 +1,15 @@
 #!/usr/bin/env python3
 """Type-check the CUDA sources without a GPU and without nvcc.
 
-The 5090 box has the toolkit; the machine this was written on has neither a
-device nor nvcc, and "I edited 900 lines of CUDA but could not compile it" is
-not a state worth being in. clang has compiled CUDA for years and only needs
-headers, so this pulls the headers out of the pip wheels NVIDIA publishes
-(no driver, no device, no toolkit install) and runs clang -fsyntax-only.
+Pulls CUDA headers from NVIDIA's pip wheels (no driver, device, or
+toolkit) and runs clang -fsyntax-only on csrc/*.cu.
 
-What this catches: syntax, name lookup, overload resolution, kernel launch
-argument types, template instantiation in CUB and Thrust. What it does not
-catch: anything about how the code behaves. It is a compile gate, not a
-correctness gate, scripts/g0_agg_ref.py is the correctness gate, and the
-device fingerprint in a1_e6s_voi.json is the real one.
+Catches syntax, name lookup, overload resolution, kernel launch argument
+types, and CUB/Thrust template instantiation. Does not catch runtime
+behavior; g0_agg_ref.py is the CPU replica for that.
 
-Header-only, so ptxas and libdevice are never invoked and the CUDA version
-clang knows about does not have to match.
+Header-only, so ptxas and libdevice are never invoked and clang's CUDA
+version does not have to match the lab toolkit.
 """
 from __future__ import annotations
 

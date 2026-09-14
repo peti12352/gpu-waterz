@@ -8,9 +8,6 @@ call it from numpy or torch CUDA.
 EM volume -> CNN affinities [3,Z,Y,X] -> gpu_waterz.segment -> uint32 labels
 ```
 
-This is the decode after affinity prediction, not training, meshing, or
-proofreading.
-
 ## Install
 
 ```bash
@@ -79,9 +76,8 @@ need not match waterz; the partition is what is graded.
 | 0.4 | 0.5162 | 0.5378 | 0.2268 | 0.2381 |
 | 0.5 | 0.6129 | 0.6309 | 0.2184 | 0.2293 |
 
-Those two VOI numbers are split and merge on the same volume, not two
-spatial crops. Mutex, Kruskal, and frozen-edge MST produce different
-partitions on the same RAG: [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
+Mutex, Kruskal, and frozen-edge MST produce different partitions on the
+same RAG: [data/cache/voi_atlas.csv](data/cache/voi_atlas.csv).
 
 ## Speed (idle RTX 5090)
 
@@ -107,9 +103,9 @@ WATERZ_FOLD_FLATTEN=1 WATERZ_SHARE_OFF=1 WATERZ_HOOK_ROOT=1
 WATERZ_FUSE_DIRTY=1 WATERZ_NLIVE_ARITH=1 WATERZ_EMIT_HOLES=1
 ```
 
-Do not turn on `WATERZ_LISTED_INSERT`, `WATERZ_LISTED_REBUILD`,
-`WATERZ_SLOT_EMIT`, or `WATERZ_LIST_JUMP` by default. Stacked they cut
-2.16 agg by ~56 ms; that is optional env, not this pin.
+`WATERZ_LISTED_INSERT` / `LISTED_REBUILD` / `SLOT_EMIT` / `LIST_JUMP` are
+off in this pin. Stacked they cut 2.16 agg by ~56 ms and still match
+parents.
 
 ```
 bash scripts/legal_eval.sh

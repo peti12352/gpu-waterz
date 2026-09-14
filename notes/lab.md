@@ -4,9 +4,8 @@ Library docs: [README](../README.md), [usage](../docs/usage.md),
 [decode](../docs/decode.md), [porting](../docs/porting.md),
 [citations](../docs/citations.md).
 
-This file is the leftover work and the closed attacks. Campaign probes,
-dead kernels, and the original listing live in local `archive/` (gitignored).
-Do not treat that folder as part of the install.
+Leftover work and closed attacks. Campaign probes and dead kernels live
+in local `archive/` (gitignored).
 
 ## Pin (idle RTX 5090)
 
@@ -33,10 +32,8 @@ bash scripts/legal_eval.sh          # four-T + identity on CREMI-A val
 bash scripts/legal_eval.sh --216    # plus 2.16 timing if the volume exists
 ```
 
-Product default is paper-style ParHAC (E6s). Do not default
-`WATERZ_LISTED_INSERT`, `WATERZ_LISTED_REBUILD`, `WATERZ_SLOT_EMIT`,
-`WATERZ_LIST_JUMP`, or `WATERZ_CSR_REWRITE`. Do not launch
-`archive/csrc/n20_rnn_gpu_prep.cu`.
+Product default is paper-style ParHAC (E6s). Listed / slot-emit / CSR
+rewrite flags stay off (CSR is identity-true and slower).
 
 Affinity thresholds are **affinity** (merge while contact-mean > T).
 Stock waterz heaps on **score** `1 - affinity`:
@@ -57,15 +54,14 @@ this watershed plus contact-mean ParHAC cannot get much below the pin.
    `k_rewrite_dirty_fuse` is still 273 ms on 2.16. Contact-mean incidence
    lists (`head`/`nxt`, splice, listed fuse) match the CPU scan every
    inner, then lose on the GPU: identity+four PASS, 2.16 agg **23240 ms**,
-   `k_csr_gather` pointer-chase. Do not rebuild CSR from full nscan each
-   inner.
+   `k_csr_gather` pointer-chase. Rebuilding CSR from full nscan each inner
+   is the slow path.
 2. **A written ceiling.** If the heavy agg kernels vanished, about
    690-1130 ms of agglomeration would still remain, plus hundreds of ms
    of watershed. Optional A5 (`LISTED_INSERT`+`LISTED_REBUILD`+`SLOT_EMIT`)
    is identity+four PASS and a **56 ms** 2.16 cut (1622-1624 vs 1679.9);
    flags stay off. That is still the 1600 ms class.
-3. **Another GPU.** Unmeasured. Do not scale 5090 times by HBM.
-   [porting.md](../docs/porting.md).
+3. **Another GPU.** Unmeasured. [porting.md](../docs/porting.md).
 
 Unique leftover owners on the pin: `k_w5_compress_list` 508,
 `k_rebuild_active` 278, `k_rewrite_dirty_fuse` 273, `k_hash_insert` 174,

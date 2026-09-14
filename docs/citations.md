@@ -1,22 +1,19 @@
 # Citations
 
-Papers and code this repo actually used, and what we concluded.
-Local PDFs, HTML extracts, and clones live under `papers/` on the
-machine that fetched them. They are not in git.
+Papers and code this repo used, and what we concluded. Local PDFs and
+clones live under `papers/` on the machine that fetched them (not in git).
 
 Vendored waterz: `funkey/waterz` commit
 `a0184d2af2ab3ed044721fb92822fc6ea9cee665` (2025-09-18), at
 `src/waterz-upstream/`. Watershed / RAG / mean / heap / VOI semantics
-are that source plus the affinity-vs-score table in [notes/lab.md](../notes/lab.md),
-not a paper dump.
+are that source plus the affinity-vs-score table in [notes/lab.md](../notes/lab.md).
 
-## What we ship
+## Used in the product
 
 Funke, J., et al. Large scale image segmentation with structured loss
 based deep learning for connectome reconstruction. *IEEE TPAMI*, 2019.
 DOI 10.1109/TPAMI.2018.2835450. Also arXiv:1709.02974.
-CNN affinities, then waterz-style agglomeration. Pipeline context, not
-a speed number.
+CNN affinities, then waterz-style agglomeration.
 
 Dhulipala, L., Blelloch, G. E., Shun, J. Hierarchical agglomerative
 graph clustering in poly-logarithmic depth. *NeurIPS*, 2022.
@@ -40,7 +37,7 @@ CREMI-A val affinities in the bounty tarball (CAD checkpoint).
 ## Same RAG, different clustering (measured, rejected)
 
 Same cached CREMI-A contact-mean RAG, same VOI grader
-(`data/cache/voi_atlas.csv`). None of these is the product.
+(`data/cache/voi_atlas.csv`):
 
 Wolf, S., et al. The mutex watershed and its superpixelation of images.
 *IEEE TPAMI*, 2020. DOI 10.1109/TPAMI.2020.2980827. arXiv:1904.12654.
@@ -51,7 +48,7 @@ Under-merge on this RAG (split VOI ~0.9-2.1).
 Bailoni, A., et al. A generalized framework for agglomerative clustering
 of signed graphs applied to instance segmentation. arXiv:1906.11713.
 GASP. AbsMax path is mutex-class. Mean path in nifty/affogato is unsigned
-mean, not a license to switch the GPU product.
+mean.
 
 Zlateski, A., Seung, H. S. Image segmentation by size-dependent single
 linkage clustering of a watershed basin graph. arXiv:1505.00249.
@@ -87,9 +84,9 @@ SubgraphHAC / good-merge on a partitioned graph. Control-flow is not
 our ParHAC matching on one RAG.
 
 Yu, S., Dhulipala, L., Łącki, J., Parotsidis, N. DynHAC. arXiv:2501.07745.
-Dynamic TeraHAC, not a static 2x on this agglomerator.
+Dynamic TeraHAC.
 
-## Average-linkage relatives (not a drop-in)
+## Average-linkage relatives
 
 Murtagh, F., Contreras, P. Algorithms for hierarchical clustering: an
 overview. *WIREs Data Mining*, 2012.

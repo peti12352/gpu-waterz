@@ -4,7 +4,7 @@
 LSD/daisy workers split fragments then agglomerate (see
 https://github.com/funkelab/lsd/blob/tutorial/lsd/tutorial/scripts/workers/agglomerate_worker.py).
 This script is the e2e drop-in for one block: read [3,Z,Y,X] affinities,
-call gpu_waterz.segment, write uint32 labels. No Mongo.
+call gpu_waterz.segment, write uint32 labels.
 
 Needs zarr (uv sync --extra zarr) and CUDA libs for a real decode.
 Without .so files it still writes the synthetic affinity volume and skips
