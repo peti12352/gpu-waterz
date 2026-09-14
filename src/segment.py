@@ -289,8 +289,9 @@ def _heap(u, v, sm, ct, thresholds, max_id):
 def _agg_eps(thresholds=None, default=0.08):
     """Accuracy path stays eps=0.08. Speed path (single T=0.3) defaults to 0.40.
 
-    Four-T VOI is illegal above 0.08 (N2). T=0.3-only eps=0.32/0.40 already
-    PASSed N2. WATERZ_AGG_EPS overrides either default when set.
+    Four-T default is 0.08; 0.09 still passes four-T on the current stack.
+    Single T=0.3 merge VOI fails at eps 0.41. WATERZ_AGG_EPS overrides
+    either default when set.
     """
     s = os.environ.get("WATERZ_AGG_EPS")
     if s:

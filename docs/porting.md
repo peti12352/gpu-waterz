@@ -51,7 +51,7 @@ measure peak on the card you run before changing buffer-sharing.
 |---|---|
 | Affinity in VRAM before the event window | `HOST_PARK`/`AFF_PARK` put pageable PCIe inside the timer. N8 e2e 13518 ms vs N10 parks-off 4918 ms; 6 GiB H2D was booked as RAG |
 | Idle GPU | Co-tenant (VLLM) moved one workload 1634-5018 ms (~3.1x) |
-| CUDA events, median of 5 after warmup | same method as the 5090 pin |
+| CUDA events, one timed run after the val gate | `scripts/check.py --216`; pin `N19_I0_REPRO.json` is that class of measurement, not a median of 5 |
 | Four-T VOI before a 2.16 speed number | N18 A4: T=0.3 VOI looked OK after nfrag 2.175M -> 3.14M |
 | Val cuts under 100 ms | N18 B3: `COMPACT_EVERY=8` won on val, lost on 2.16 (1765 vs 1690 ms agg) |
 | Dual-eps 0.08 / 0.40 | 0.41-0.49 fail merge VOI at T=0.3 |

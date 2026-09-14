@@ -121,10 +121,11 @@ that to CUDA as one pop per kernel keeps the serial chain.
 
 Approximate the **order of merges**; keep the **mean statistic**. ParHAC
 does (1+eps)-heavy matching: many disjoint merges in a round if they are
-close enough to locally heaviest, then contract, repeat. On this RAG `eps`
-is a phase boundary:
+close enough to locally heaviest, then contract, repeat. Product defaults
+on this RAG:
 
-- Four cuts (0.2-0.5): `eps = 0.08`. 0.09 already fails at 0.2.
+- Four cuts (0.2-0.5): `eps = 0.08`. 0.09 still passes four-T (aff 0.2
+  merge 0.3441, limit 0.3525).
 - Single cut at 0.3: `eps = 0.40`. Every 0.01 step from 0.41 to 0.49 fails
   merge VOI (N18 B2).
 
