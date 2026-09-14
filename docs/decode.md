@@ -121,3 +121,23 @@ parents than ParHAC. We stopped.
 [funkey/waterz PR 24](https://github.com/funkey/waterz/pull/24) took CPU RAG
 52s -> 18s and agglomeration 71s -> 28s on 1024^3-class volumes. That is the
 CPU class this GPU path replaces.
+
+## What the CUDA path implements
+
+The README claims, with the knobs:
+
+- Watershed: affinity flow; a plateau (tied max) is one basin. Extra
+  closed-plateau components fail VOI.
+- Region graph: each edge stores integer affinity-byte sum and contact
+  count. Float `atomicAdd` disagreed across runs on 7.4e5 of 7.5e6 val
+  edges.
+- Agglomeration: ParHAC (1+eps)-heavy matching, not one heap pop per
+  kernel. Dual-eps: **0.08** for four cuts, **0.40** for a single T=0.3.
+  Clustered-graph "small merge" rounds are false here (layer 0 is most of
+  the merges). ParHAC's published code is CPU (CPAM), not CUDA.
+- 2.16 Gvox fits by z-slab N=3, peak 13.22 GiB. Naive fused working set is
+  ~42 GiB. See [porting.md](porting.md).
+- Identity: two full runs, byte-identical labels. CREMI-A val
+  nfrag=2175400, bg=506568. Gate: `bash scripts/legal_eval.sh`.
+  Pin: `data/cache/N19_I0_REPRO.json`.
+- Public API does not yet have `min_size` or merge-from-a-precomputed-RAG.
