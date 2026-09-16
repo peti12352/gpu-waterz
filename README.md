@@ -1,5 +1,7 @@
 # gpu-waterz
 
+Algorithm: [docs/best.md](docs/best.md).
+
 GPU port of [`waterz`](https://github.com/funkey/waterz). Affinities in,
 labels out. numpy or torch.
 
@@ -22,8 +24,7 @@ RTX 5090: 3.1 s, ~13 GiB peak vs ~42 fused.
 
 Same contact-mean merge as waterz. The heap order is approximated so it
 can run in parallel. Mutex, Kruskal, GASP, and the rest on this graph miss
-the VOI box: [voi_atlas.csv](data/cache/voi_atlas.csv). Algorithm:
-[docs/decode.md](docs/decode.md).
+the VOI box: [voi_atlas.csv](data/cache/voi_atlas.csv).
 
 ## Install
 
@@ -129,6 +130,7 @@ bash scripts/eval.sh --216    # plus 2.16 Gvox timing if that HDF5 exists
 
 | File | What it is |
 |---|---|
+| [docs/best.md](docs/best.md) | watershed, contact-mean RAG, ParHAC |
 | [docs/usage.md](docs/usage.md) | pipeline call sites, stages, build, eval volumes |
 | [docs/decode.md](docs/decode.md) | why this algorithm, VOI, knobs vs other clustering |
 | [docs/porting.md](docs/porting.md) | other GPUs: build, VRAM, pin env, how to time |
